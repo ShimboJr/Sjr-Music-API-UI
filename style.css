@@ -427,6 +427,46 @@ body {
   box-shadow: 0 16px 48px rgba(0, 0, 0, .55), 0 0 28px var(--accent-glow);
 }
 
+/* ── Now-playing highlight ────────────────────────── */
+.song-card.now-playing {
+  border-color: var(--accent);
+  box-shadow:
+    0 0 0 2px var(--accent),
+    0 16px 48px rgba(0, 0, 0, .55),
+    0 0 36px var(--accent-glow);
+  animation: fadeSlideIn .45s ease both, nowPlayingPulse 3s ease-in-out infinite;
+}
+
+@keyframes nowPlayingPulse {
+  0%, 100% { box-shadow: 0 0 0 2px var(--accent), 0 16px 48px rgba(0,0,0,.55), 0 0 28px var(--accent-glow); }
+  50%       { box-shadow: 0 0 0 2px var(--accent), 0 16px 48px rgba(0,0,0,.55), 0 0 52px rgba(124,58,237,.55); }
+}
+
+/* Animated equaliser badge that replaces the track number */
+.now-playing-badge {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 14px;
+}
+
+.eq-bar {
+  display: inline-block;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--accent-2);
+  animation: eqBounce 0.8s ease-in-out infinite alternate;
+}
+
+.eq-bar:nth-child(1) { height: 60%; animation-delay: 0s;    }
+.eq-bar:nth-child(2) { height: 100%; animation-delay: 0.15s; }
+.eq-bar:nth-child(3) { height: 40%; animation-delay: 0.3s;  }
+
+@keyframes eqBounce {
+  from { transform: scaleY(0.3); opacity: .7; }
+  to   { transform: scaleY(1);   opacity: 1;  }
+}
+
 /* ── Track number badge ───────────────────────── */
 .card-num {
   position: absolute;

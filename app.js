@@ -238,7 +238,7 @@ function clearSearch() {
   setStatus(`Catalogue loaded — ${allSongs.length} songs available. Use the search above to find your music.`);
 }
 
-/* ── Render (card grid with innerHTML +=) ────────── */
+/* ── Render (card grid) ──────────────────────────── */
 function renderResults(songs, query = {}) {
   if (songs.length === 0) {
     showState('empty');
@@ -247,6 +247,9 @@ function renderResults(songs, query = {}) {
 
   /* Reset grid */
   resultsGrid.innerHTML = '';
+
+  /* Collect audio elements as we build cards so we can wire autoplay */
+  const audioNodes = [];
 
   songs.forEach((song, idx) => {
 
@@ -299,15 +302,16 @@ function renderResults(songs, query = {}) {
       .join('');
 
     /* ── Audio preview ── */
-    const audioHTML = isValidAudioUrl(song.songUrl)
-      ? `<audio class="card-audio" controls preload="none">
+    const hasAudio = isValidAudioUrl(song.songUrl);
+    const audioHTML = hasAudio
+      ? `<audio class="card-audio" controls preload="none" data-card-index="${idx}">
            <source src="${escAttr(song.songUrl)}" type="audio/mpeg" />
          </audio>`
       : `<p class="no-preview"><i class="bi bi-slash-circle me-1"></i>Preview unavailable</p>`;
 
     /* ── Download button ── */
     const dlFilename = song.title + ' - ' + song.artist + '.mp3';
-    const downloadHTML = isValidAudioUrl(song.songUrl)
+    const downloadHTML = hasAudio
       ? `<button
            class="btn-download"
            data-url="${escAttr(song.songUrl)}"
@@ -316,27 +320,38 @@ function renderResults(songs, query = {}) {
          </button>`
       : '';
 
-    /* ── Card HTML ── */
-    resultsGrid.innerHTML += `
-      <div class="song-card" style="animation-delay:${Math.min(idx * 0.05, 0.5)}s">
-        <div class="card-num">${idx + 1}</div>
-        <div class="card-art-wrap">
-          ${artHTML}
+    /* ── Build card as a real DOM element so we can grab the audio node ── */
+    const cardEl = document.createElement('div');
+    cardEl.className = 'song-card';
+    cardEl.style.animationDelay = `${Math.min(idx * 0.05, 0.5)}s`;
+    cardEl.dataset.cardIndex = idx;
+    cardEl.innerHTML = `
+      <div class="card-num" data-num="${idx + 1}">${idx + 1}</div>
+      <div class="card-art-wrap">
+        ${artHTML}
+      </div>
+      <div class="card-body">
+        <h2 class="card-heading">
+          <i class="bi bi-download me-2 card-heading-icon"></i>${escHtml(song.artist)} – ${escHtml(song.title)}
+        </h2>
+        <ul class="detail-list">
+          ${rows}
+        </ul>
+        <div class="card-player">
+          ${audioHTML}
         </div>
-        <div class="card-body">
-          <h2 class="card-heading">
-            <i class="bi bi-download me-2 card-heading-icon"></i>${escHtml(song.artist)} – ${escHtml(song.title)}
-          </h2>
-          <ul class="detail-list">
-            ${rows}
-          </ul>
-          <div class="card-player">
-            ${audioHTML}
-          </div>
-          ${downloadHTML}
-        </div>
+        ${downloadHTML}
       </div>`;
+
+    resultsGrid.appendChild(cardEl);
+
+    /* Grab the live <audio> node (null if song has no preview) */
+    const audioEl = cardEl.querySelector('audio.card-audio');
+    audioNodes.push(audioEl); /* keeps index alignment with songs[] */
   });
+
+  /* ── Wire autoplay + single-playback enforcement ── */
+  wireAudioAutoplay(audioNodes);
 
   showState('results');
 
@@ -352,6 +367,81 @@ function renderResults(songs, query = {}) {
     `Showing results for ${labelParts.join(', ')} — sorted A–Z`,
     songs.length
   );
+}
+
+/* ── Autoplay wiring ─────────────────────────────── */
+/**
+ * Given the ordered list of <audio> nodes (null entries for songs with no
+ * preview), attach:
+ *  • 'play'  — pauses every other audio and updates the now-playing highlight
+ *  • 'pause' / 'ended' — removes the now-playing highlight
+ *  • 'ended' — advances to the next playable audio in the list
+ */
+function wireAudioAutoplay(audioNodes) {
+
+  function setNowPlaying(idx) {
+    /* Remove highlight from all cards */
+    resultsGrid.querySelectorAll('.song-card').forEach(card => {
+      card.classList.remove('now-playing');
+      const badge = card.querySelector('.card-num');
+      if (badge) badge.innerHTML = badge.dataset.num; /* restore track number */
+    });
+
+    if (idx === null) return;
+
+    /* Highlight the active card */
+    const card = resultsGrid.querySelector(`.song-card[data-card-index="${idx}"]`);
+    if (!card) return;
+    card.classList.add('now-playing');
+    const badge = card.querySelector('.card-num');
+    if (badge) badge.innerHTML = `
+      <span class="now-playing-badge">
+        <span class="eq-bar"></span>
+        <span class="eq-bar"></span>
+        <span class="eq-bar"></span>
+      </span>`;
+  }
+
+  audioNodes.forEach((audio, idx) => {
+    if (!audio) return; /* no preview for this song */
+
+    /* Single-playback: pause all others when this one plays */
+    audio.addEventListener('play', () => {
+      audioNodes.forEach((other, otherIdx) => {
+        if (other && otherIdx !== idx && !other.paused) other.pause();
+      });
+      setNowPlaying(idx);
+    });
+
+    /* Remove highlight when paused manually */
+    audio.addEventListener('pause', () => {
+      /* Small delay so 'ended' (which fires pause first) can override */
+      setTimeout(() => {
+        if (audio.ended || audio.paused) setNowPlaying(null);
+      }, 50);
+    });
+
+    /* Auto-advance when the song finishes */
+    audio.addEventListener('ended', () => {
+      /* Find the next index that has a playable audio */
+      for (let next = idx + 1; next < audioNodes.length; next++) {
+        const nextAudio = audioNodes[next];
+        if (!nextAudio) continue;
+
+        /* Scroll the next card into view */
+        const nextCard = resultsGrid.querySelector(`.song-card[data-card-index="${next}"]`);
+        if (nextCard) nextCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+        /* Load and play */
+        nextAudio.load();
+        nextAudio.play().catch(err => console.warn('Autoplay blocked by browser:', err));
+        return;
+      }
+
+      /* No next song — clear highlight */
+      setNowPlaying(null);
+    });
+  });
 }
 
 /* ── UI state manager ───────────────────────────── */
