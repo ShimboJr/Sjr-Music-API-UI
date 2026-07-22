@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SJr Music – Discover &amp; Stream</title>
+  <meta name="description"
+    content="Search and stream thousands of songs by title, artist or album. Powered by the SJr Music API." />
+
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap"
+    rel="stylesheet" />
+
+  <!-- Bootstrap 5 -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
+
+  <!-- Bootstrap Icons -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet" />
+
+  <!-- Custom CSS -->
+  <link rel="stylesheet" href="style.css" />
+</head>
+
+<body>
+
+  <!-- ───────────── HERO / HEADER ───────────── -->
+  <header class="site-header">
+    <div class="header-bg-blur"></div>
+    <div class="container position-relative">
+      <div class="text-center py-5">
+        <div class="logo-wrap mb-3">
+          <span class="logo-icon"><i class="bi bi-music-note-beamed"></i></span>
+          <span class="logo-text">SJr<span class="logo-accent">Music</span></span>
+        </div>
+        <h1 class="hero-title">Discover &amp; Stream Your Favourites</h1>
+        <p class="hero-sub">Search across our full catalogue by song title, artist, or album</p>
+
+        <!-- Search Bar -->
+        <div class="search-card mx-auto mt-4" id="search-section">
+          <div class="row g-3 align-items-end">
+            <div class="col-12 col-md-4">
+              <label for="searchTitle" class="search-label">
+                <i class="bi bi-music-note me-1"></i>Song Title
+              </label>
+              <div class="input-wrap">
+                <i class="bi bi-search input-icon"></i>
+                <input type="text" id="searchTitle" class="form-control search-input" placeholder="e.g. Basquiat"
+                  autocomplete="off" />
+              </div>
+            </div>
+            <div class="col-12 col-md-4">
+              <label for="searchArtist" class="search-label">
+                <i class="bi bi-person me-1"></i>Artist
+              </label>
+              <div class="input-wrap">
+                <i class="bi bi-mic input-icon"></i>
+                <input type="text" id="searchArtist" class="form-control search-input" placeholder="e.g. Asake"
+                  autocomplete="off" />
+              </div>
+            </div>
+            <div class="col-12 col-md-4">
+              <label for="searchAlbum" class="search-label">
+                <i class="bi bi-vinyl me-1"></i>Album
+              </label>
+              <div class="input-wrap">
+                <i class="bi bi-collection input-icon"></i>
+                <input type="text" id="searchAlbum" class="form-control search-input" placeholder="e.g. Lungu Boy"
+                  autocomplete="off" />
+              </div>
+            </div>
+          </div>
+
+          <div class="d-flex gap-3 mt-4 justify-content-center flex-wrap">
+            <button id="searchBtn" class="btn btn-search">
+              <i class="bi bi-search me-2"></i>Search
+            </button>
+            <button id="clearBtn" class="btn btn-clear">
+              <i class="bi bi-x-circle me-2"></i>Clear
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Animated floating notes -->
+    <div class="floating-notes" aria-hidden="true">
+      <span class="note n1"><i class="bi bi-music-note"></i></span>
+      <span class="note n2"><i class="bi bi-music-note-beamed"></i></span>
+      <span class="note n3"><i class="bi bi-music-note-list"></i></span>
+      <span class="note n4"><i class="bi bi-music-note"></i></span>
+      <span class="note n5"><i class="bi bi-music-note-beamed"></i></span>
+    </div>
+  </header>
+
+  <!-- ───────────── MAIN CONTENT ───────────── -->
+  <main class="container py-5">
+
+    <!-- Status bar -->
+    <div id="statusBar" class="status-bar d-none mb-4">
+      <span id="statusText"></span>
+      <span id="resultCount" class="badge-count ms-2"></span>
+    </div>
+
+    <!-- Loading spinner -->
+    <div id="loadingState" class="text-center py-5 d-none">
+      <div class="spinner-ring">
+        <div></div>
+        <div></div>
+        <div></div>
+        <div></div>
+      </div>
+      <p class="mt-3 loading-text">Fetching music catalogue…</p>
+    </div>
+
+    <!-- Error state -->
+    <div id="errorState" class="error-card text-center py-5 d-none">
+      <i class="bi bi-wifi-off error-icon"></i>
+      <h4 class="mt-3">Could not load catalogue</h4>
+      <p class="text-muted">Please check your connection and try again.</p>
+      <button id="retryBtn" class="btn btn-search mt-2">
+        <i class="bi bi-arrow-clockwise me-2"></i>Retry
+      </button>
+    </div>
+
+    <!-- Empty state -->
+    <div id="emptyState" class="empty-card text-center py-5 d-none">
+      <i class="bi bi-vinyl empty-icon"></i>
+      <h4 class="mt-3">No songs found</h4>
+      <p class="text-muted">Try different keywords or clear the filters.</p>
+    </div>
+
+    <!-- Results grid (cards) -->
+    <div id="resultsWrapper" class="d-none">
+      <div id="resultsGrid" class="results-grid"></div>
+    </div>
+
+  </main>
+
+  <!-- ───────────── FOOTER ───────────── -->
+  <footer class="site-footer-bar">
+    <div class="container text-center">
+      <span class="footer-logo"><i class="bi bi-music-note-beamed me-1"></i>SJrMusic</span>
+      <span class="footer-sep">•</span>
+      <span class="footer-text">Powered by the SJr Music API</span>
+    </div>
+  </footer>
+
+  <!-- Bootstrap JS -->
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+
+  <!-- App Script -->
+  <script src="app.js"></script>
+</body>
+
+</html>
