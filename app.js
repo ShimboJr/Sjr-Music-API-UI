@@ -32,6 +32,9 @@ const resultCount = document.getElementById('resultCount');
 /* ── State ─────────────────────────────────────── */
 let allSongs = [];
 
+/* Active tag filters: fields not covered by the main search inputs */
+let tagFilter = { category: '', genre: '', released: '' };
+
 /* ── Initialise ─────────────────────────────────── */
 window.addEventListener('DOMContentLoaded', () => {
   fetchCatalogue();
@@ -45,12 +48,26 @@ window.addEventListener('DOMContentLoaded', () => {
     input.addEventListener('keydown', e => { if (e.key === 'Enter') runSearch(); });
   });
 
-  /* Download – event delegation on the grid container */
+  /* Download + tag-chip – event delegation on the grid container */
   resultsGrid.addEventListener('click', e => {
+    /* Download */
     const btn = e.target.closest('.btn-download');
     if (btn && btn.dataset.url) {
       downloadSong(btn.dataset.url, btn.dataset.filename || 'song.mp3', btn);
+      return;
     }
+
+    /* Clickable tag chip */
+    const chip = e.target.closest('.tag-chip');
+    if (chip) {
+      filterByTag(chip.dataset.field, chip.dataset.value);
+    }
+  });
+
+  /* Dismiss active tag from the tag bar */
+  document.getElementById('activeTagBar').addEventListener('click', e => {
+    const dismiss = e.target.closest('.active-tag-dismiss');
+    if (dismiss) clearTagFilter(dismiss.dataset.field);
   });
 });
 
@@ -110,34 +127,113 @@ async function fetchCatalogue() {
 
 /* ── Search / Filter ───────────────────────────── */
 function runSearch() {
-  const qTitle = normalize(searchTitleEl.value);
+  const qTitle  = normalize(searchTitleEl.value);
   const qArtist = normalize(searchArtistEl.value);
-  const qAlbum = normalize(searchAlbumEl.value);
+  const qAlbum  = normalize(searchAlbumEl.value);
+  const { category: qCategory, genre: qGenre, released: qReleased } = tagFilter;
 
-  if (!qTitle && !qArtist && !qAlbum) {
+  const hasInput = qTitle || qArtist || qAlbum || qCategory || qGenre || qReleased;
+  if (!hasInput) {
     setStatus('Please enter at least one search term to get results.');
     showState('idle');
     return;
   }
 
   const filtered = allSongs.filter(song => {
-    const titleMatch = !qTitle || normalize(song.title).includes(qTitle);
-    const artistMatch = !qArtist || normalize(song.artist).includes(qArtist);
-    const albumMatch = !qAlbum || normalize(song.album || '').includes(qAlbum);
-    return titleMatch && artistMatch && albumMatch;
+    const titleMatch    = !qTitle    || normalize(song.title).includes(qTitle);
+    const artistMatch   = !qArtist   || normalize(song.artist).includes(qArtist)
+                                     || normalize(song.featuring || '').includes(qArtist);
+    const albumMatch    = !qAlbum    || normalize(song.album    || '').includes(qAlbum);
+    const categoryMatch = !qCategory || normalize(song.category || '') === qCategory;
+    const genreMatch    = !qGenre    || normalize(song.genre    || '') === qGenre;
+    const releasedMatch = !qReleased || normalize(song.released || '') === qReleased;
+    return titleMatch && artistMatch && albumMatch && categoryMatch && genreMatch && releasedMatch;
   });
 
   /* Sort alphabetically by title */
   filtered.sort((a, b) => a.title.localeCompare(b.title));
 
-  renderResults(filtered, { qTitle, qArtist, qAlbum });
+  renderResults(filtered, { qTitle, qArtist, qAlbum, qCategory, qGenre, qReleased });
+
+  /* Clear inputs after search so the fields are ready for a new query */
+  searchTitleEl.value  = '';
+  searchArtistEl.value = '';
+  searchAlbumEl.value  = '';
+}
+
+/* ── Tag-chip filter ────────────────────────────── */
+/**
+ * Called when a clickable chip inside a song card is clicked.
+ * @param {'artist'|'category'|'genre'|'album'|'released'} field
+ * @param {string} value  Raw (unescaped) value from data-value
+ */
+function filterByTag(field, value) {
+  /* Scroll the search bar into view for feedback */
+  document.getElementById('search-section').scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+  if (field === 'artist') {
+    /* Featuring artist → populate the Artist search input */
+    searchArtistEl.value = value;
+  } else if (field === 'album') {
+    /* Album → populate the Album search input */
+    searchAlbumEl.value = value;
+  } else if (field === 'category' || field === 'genre' || field === 'released') {
+    /* Tag-only fields → store in tagFilter state */
+    tagFilter[field] = normalize(value);
+    renderTagBar();
+  }
+
+  runSearch();
+}
+
+/* Clear a single tag filter field */
+function clearTagFilter(field) {
+  if (field in tagFilter) {
+    tagFilter[field] = '';
+    renderTagBar();
+    /* Re-run search (or reset if nothing is left to filter on) */
+    const qTitle  = normalize(searchTitleEl.value);
+    const qArtist = normalize(searchArtistEl.value);
+    const qAlbum  = normalize(searchAlbumEl.value);
+    const anyLeft = qTitle || qArtist || qAlbum ||
+                    tagFilter.category || tagFilter.genre || tagFilter.released;
+    if (anyLeft) {
+      runSearch();
+    } else {
+      showState('idle');
+      setStatus(`Catalogue loaded — ${allSongs.length} songs available. Use the search above to find your music.`);
+    }
+  }
+}
+
+/* Render active tag pills above the results grid */
+function renderTagBar() {
+  const bar = document.getElementById('activeTagBar');
+  const labels = { category: 'Category', genre: 'Genre', released: 'Released' };
+
+  const chips = Object.entries(tagFilter)
+    .filter(([, v]) => v !== '')
+    .map(([field, val]) => `
+      <span class="active-tag">
+        <i class="bi bi-funnel-fill me-1" style="font-size:.7rem"></i>
+        ${labels[field]}: <strong>${escHtml(val)}</strong>
+        <button class="active-tag-dismiss" data-field="${field}" title="Remove filter" aria-label="Remove ${labels[field]} filter">
+          <i class="bi bi-x"></i>
+        </button>
+      </span>`)
+    .join('');
+
+  bar.innerHTML = chips;
+  bar.classList.toggle('d-none', chips === '');
 }
 
 /* ── Clear ─────────────────────────────────────── */
 function clearSearch() {
-  searchTitleEl.value = '';
+  searchTitleEl.value  = '';
   searchArtistEl.value = '';
-  searchAlbumEl.value = '';
+  searchAlbumEl.value  = '';
+  tagFilter = { category: '', genre: '', released: '' };
+  renderTagBar();
   showState('idle');
   setStatus(`Catalogue loaded — ${allSongs.length} songs available. Use the search above to find your music.`);
 }
@@ -170,19 +266,35 @@ function renderResults(songs, query = {}) {
       : `<div class="card-art-fallback"><i class="bi bi-music-note-beamed"></i></div>`;
 
     /* ── Detail rows — only render a row if value exists ── */
+
+    /* Featuring: split on common delimiters and render individual clickable chips */
+    const featuringChips = (song.featuring || '')
+      .split(/,|&|\bfeat\.?\b|\bft\.?\b/i)
+      .map(n => n.trim())
+      .filter(Boolean)
+      .map(name =>
+        `<button class="tag-chip tag-chip--artist" data-field="artist" data-value="${escAttr(name)}" title="Filter by ${escAttr(name)}">${escHtml(name)}</button>`
+      ).join('');
+
+    /* Simple single-value chip builder for category / genre / album / released */
+    const chip = (field, value, extraCls = '') => {
+      if (!value || !value.trim()) return escHtml(value);
+      return `<button class="tag-chip ${extraCls}" data-field="${field}" data-value="${escAttr(value)}" title="Filter by ${escAttr(value)}">${escHtml(value)}</button>`;
+    };
+
     const rows = [
-      { label: 'Artist', value: escHtml(song.artist), cls: 'detail-artist' },
-      { label: 'Featuring', value: escHtml(song.featuring || ''), cls: '' },
-      { label: 'Category', value: escHtml(song.category || ''), cls: 'detail-category' },
-      { label: 'Genre', value: escHtml(song.genre || ''), cls: '' },
-      { label: 'Album', value: escHtml(song.album || ''), cls: '' },
-      { label: 'Released', value: escHtml(song.released || ''), cls: '' },
+      { label: 'Artist',   valueHtml: `<span class="detail-value detail-artist">${escHtml(song.artist)}</span>`,                         raw: song.artist },
+      { label: 'Featuring',valueHtml: featuringChips ? `<span class="detail-value tag-chips-wrap">${featuringChips}</span>` : '',        raw: song.featuring || '' },
+      { label: 'Category', valueHtml: `<span class="detail-value detail-category">${chip('category', song.category || '', 'tag-chip--category')}</span>`, raw: song.category || '' },
+      { label: 'Genre',    valueHtml: `<span class="detail-value">${chip('genre',    song.genre    || '', 'tag-chip--genre')}</span>`,    raw: song.genre    || '' },
+      { label: 'Album',    valueHtml: `<span class="detail-value">${chip('album',    song.album    || '', 'tag-chip--album')}</span>`,    raw: song.album    || '' },
+      { label: 'Released', valueHtml: `<span class="detail-value">${chip('released', song.released || '', 'tag-chip--released')}</span>`,raw: song.released || '' },
     ]
-      .filter(r => r.value.trim() !== '')
+      .filter(r => r.raw.trim() !== '')
       .map(r => `
       <li class="detail-row">
         <span class="detail-label">${r.label}</span>
-        <span class="detail-value ${r.cls}">${r.value}</span>
+        ${r.valueHtml}
       </li>`)
       .join('');
 
@@ -229,9 +341,12 @@ function renderResults(songs, query = {}) {
   showState('results');
 
   const labelParts = [];
-  if (query.qTitle) labelParts.push(`title "${searchTitleEl.value}"`);
-  if (query.qArtist) labelParts.push(`artist "${searchArtistEl.value}"`);
-  if (query.qAlbum) labelParts.push(`album "${searchAlbumEl.value}"`);
+  if (query.qTitle)    labelParts.push(`title "${query.qTitle}"`);
+  if (query.qArtist)   labelParts.push(`artist "${query.qArtist}"`);
+  if (query.qAlbum)    labelParts.push(`album "${query.qAlbum}"`);
+  if (query.qCategory) labelParts.push(`category "${query.qCategory}"`);
+  if (query.qGenre)    labelParts.push(`genre "${query.qGenre}"`);
+  if (query.qReleased) labelParts.push(`released "${query.qReleased}"`);
 
   setStatus(
     `Showing results for ${labelParts.join(', ')} — sorted A–Z`,
