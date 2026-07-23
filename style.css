@@ -37,6 +37,7 @@
 /* ── Base ─────────────────────────────────── */
 html {
   scroll-behavior: smooth;
+  overflow-x: hidden;
 }
 
 body {
@@ -831,11 +832,12 @@ audio.card-audio {
   content: '';
   position: absolute;
   top: -40px;
-  right: -40px;
+  right: 0;
   width: 200px;
   height: 200px;
   background: radial-gradient(circle, rgba(168,85,247,.12) 0%, transparent 70%);
   pointer-events: none;
+  overflow: hidden;
 }
 
 /* ── Section header row ──────────────────────── */
@@ -861,7 +863,8 @@ audio.card-audio {
   display: flex;
   align-items: center;
   gap: .75rem;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
+  min-width: 0;
 }
 
 /* ── Chevron toggle button ────────────────────── */
@@ -951,8 +954,8 @@ audio.card-audio {
   position: relative;
   display: flex;
   align-items: center;
-  flex: 0 0 auto;
-  min-width: 240px;
+  flex: 1 1 200px;
+  min-width: 0;
   max-width: 340px;
 }
 
@@ -1207,6 +1210,7 @@ audio.card-audio {
     padding: 1.25rem 1rem;
     border-radius: var(--radius-lg);
     max-width: 100%;
+    width: 100%;
   }
 
   .btn-search,
@@ -1221,8 +1225,9 @@ audio.card-audio {
     gap: .4rem;
   }
 
+  /* Two-column grid on tablets, single col on narrow phones handled below */
   .results-grid {
-    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    grid-template-columns: repeat(2, 1fr);
     gap: 1rem;
   }
 
@@ -1232,17 +1237,38 @@ audio.card-audio {
 
   /* Recent section responsive */
   .recent-section {
-    padding: 1.25rem 1rem;
+    padding: 1.25rem .9rem;
+    overflow: hidden;
   }
 
   .recent-section-header {
     flex-direction: column;
     align-items: flex-start;
+    gap: .75rem;
+  }
+
+  .recent-header-right {
+    width: 100%;
   }
 
   .recent-filter-wrap {
+    flex: 1 1 auto;
     width: 100%;
     max-width: 100%;
+    min-width: 0;
+  }
+
+  .recent-filter-input {
+    width: 100%;
+  }
+
+  .tag-chips-wrap {
+    gap: .25rem;
+  }
+
+  .tag-chip {
+    font-size: .7rem;
+    padding: .18em .55em;
   }
 }
 
@@ -1265,8 +1291,10 @@ audio.card-audio {
   }
 
   .search-card {
-    padding: 1rem .85rem;
+    padding: 1rem .75rem;
     border-radius: var(--radius-md);
+    margin-left: 0;
+    margin-right: 0;
   }
 
   .search-label {
@@ -1290,5 +1318,37 @@ audio.card-audio {
   /* Landscape crop for art on tiny phones — saves vertical space */
   .card-art-wrap {
     aspect-ratio: 16 / 9;
+  }
+
+  .recent-section {
+    padding: 1rem .75rem;
+  }
+
+  .recent-heading {
+    font-size: 1.05rem;
+  }
+
+  .recent-badge {
+    width: 36px;
+    height: 36px;
+    font-size: 1.1rem;
+  }
+
+  .detail-label {
+    flex: 0 0 60px;
+    font-size: .67rem;
+  }
+
+  .detail-row {
+    font-size: .78rem;
+  }
+
+  .card-body {
+    padding: .9rem .9rem 1rem;
+  }
+
+  .active-tag-bar {
+    padding: .5rem .75rem;
+    gap: .35rem;
   }
 }
