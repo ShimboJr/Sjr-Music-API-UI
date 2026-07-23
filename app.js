@@ -13,27 +13,50 @@ const CORS_PROXIES = [
 ];
 
 /* ── DOM references ─────────────────────────────── */
-const searchTitleEl = document.getElementById('searchTitle');
+const searchTitleEl  = document.getElementById('searchTitle');
 const searchArtistEl = document.getElementById('searchArtist');
-const searchAlbumEl = document.getElementById('searchAlbum');
-const searchBtn = document.getElementById('searchBtn');
-const clearBtn = document.getElementById('clearBtn');
-const retryBtn = document.getElementById('retryBtn');
+const searchAlbumEl  = document.getElementById('searchAlbum');
+const searchBtn      = document.getElementById('searchBtn');
+const clearBtn       = document.getElementById('clearBtn');
+const retryBtn       = document.getElementById('retryBtn');
 
-const loadingState = document.getElementById('loadingState');
-const errorState = document.getElementById('errorState');
-const emptyState = document.getElementById('emptyState');
+const loadingState   = document.getElementById('loadingState');
+const errorState     = document.getElementById('errorState');
+const emptyState     = document.getElementById('emptyState');
 const resultsWrapper = document.getElementById('resultsWrapper');
-const resultsGrid = document.getElementById('resultsGrid');
-const statusBar = document.getElementById('statusBar');
-const statusText = document.getElementById('statusText');
-const resultCount = document.getElementById('resultCount');
+const resultsGrid    = document.getElementById('resultsGrid');
+const statusBar      = document.getElementById('statusBar');
+const statusText     = document.getElementById('statusText');
+const resultCount    = document.getElementById('resultCount');
+
+/* ── Recently Released DOM refs ───────────────── */
+const recentSection      = document.getElementById('recentSection');
+const recentGrid         = document.getElementById('recentGrid');
+const recentFilterInput  = document.getElementById('recentFilterInput');
+const recentFilterClear  = document.getElementById('recentFilterClear');
+const recentFilterWrap   = document.getElementById('recentFilterWrap');
+const recentCountBar     = document.getElementById('recentCountBar');
+const recentEmptyState   = document.getElementById('recentEmptyState');
+const recentBody         = document.getElementById('recentBody');
+const recentToggleBtn    = document.getElementById('recentToggleBtn');
+const recentChevronIcon  = document.getElementById('recentChevronIcon');
+const recentTeaser       = document.getElementById('recentTeaser');
+
 
 /* ── State ─────────────────────────────────────── */
-let allSongs = [];
+let allSongs    = [];
+let recentSongs = []; /* last 20 entries from allSongs */
 
 /* Active tag filters: fields not covered by the main search inputs */
 let tagFilter = { category: '', genre: '', released: '' };
+
+/**
+ * Global registry of every live <audio> node across BOTH sections.
+ * Using a Set so duplicate registrations are harmless.
+ * Stale (removed-from-DOM) nodes are pruned before each new batch is added.
+ */
+const globalAudioRegistry = new Set();
+
 
 /* ── Initialise ─────────────────────────────────── */
 window.addEventListener('DOMContentLoaded', () => {
@@ -68,6 +91,47 @@ window.addEventListener('DOMContentLoaded', () => {
   document.getElementById('activeTagBar').addEventListener('click', e => {
     const dismiss = e.target.closest('.active-tag-dismiss');
     if (dismiss) clearTagFilter(dismiss.dataset.field);
+  });
+
+  /* ── Recent section: toggle on header click / keyboard ── */
+  recentToggleBtn.addEventListener('click', e => {
+    /* Don't toggle when the user clicks inside the filter input or clear btn */
+    if (e.target.closest('.recent-filter-wrap')) return;
+    toggleRecentSection();
+  });
+  recentToggleBtn.addEventListener('keydown', e => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      if (!e.target.closest('.recent-filter-wrap')) toggleRecentSection();
+    }
+  });
+
+  /* ── Recent section: live filter ── */
+  recentFilterInput.addEventListener('input', () => {
+    const q = normalize(recentFilterInput.value);
+    recentFilterClear.classList.toggle('d-none', q === '');
+    buildRecentGrid(filterRecentSongs(q));
+  });
+
+  recentFilterClear.addEventListener('click', e => {
+    e.stopPropagation(); /* prevent header toggle */
+    recentFilterInput.value = '';
+    recentFilterClear.classList.add('d-none');
+    buildRecentGrid(recentSongs);
+    recentFilterInput.focus();
+  });
+
+  /* Tag-chip delegation for the recent grid */
+  recentGrid.addEventListener('click', e => {
+    const btn = e.target.closest('.btn-download');
+    if (btn && btn.dataset.url) {
+      downloadSong(btn.dataset.url, btn.dataset.filename || 'song.mp3', btn);
+      return;
+    }
+    const chip = e.target.closest('.tag-chip');
+    if (chip) {
+      filterByTag(chip.dataset.field, chip.dataset.value);
+    }
   });
 });
 
@@ -123,9 +187,238 @@ async function fetchCatalogue() {
 
   showState('idle');
   setStatus(`Catalogue loaded — ${allSongs.length} songs available. Use the search above to find your music.`);
+
+  /* Populate the Recently Released section */
+  renderRecentSection();
+}
+
+
+/* ── Recently Released Section ─────────────────── */
+/**
+ * Grabs the last 20 songs from allSongs (newest last assumed),
+ * stores them in recentSongs, then renders the grid.
+ */
+function renderRecentSection() {
+  recentSongs = allSongs.slice(-20).reverse(); /* newest first */
+  recentFilterInput.value = '';
+  recentFilterClear.classList.add('d-none');
+  buildRecentGrid(recentSongs);
+  recentSection.classList.remove('d-none');
+  expandRecentSection(false); /* show expanded, no animation on first load */
+}
+
+/* ── Collapse / Expand helpers ───────────────────── */
+
+/**
+ * Collapses the recent section body with a smooth slide-up animation.
+ * Hides the filter input and shows the teaser summary pill.
+ * @param {boolean} [animate=true]
+ */
+function collapseRecentSection(animate = true) {
+  if (recentSection.classList.contains('recent-collapsed')) return; /* already collapsed */
+
+  const body = recentBody;
+
+  if (animate) {
+    /* Lock current height so the transition has a start point */
+    body.style.height = body.scrollHeight + 'px';
+    /* Force reflow */
+    body.offsetHeight; // eslint-disable-line no-unused-expressions
+    body.style.height = '0';
+  } else {
+    body.style.height = '0';
+  }
+
+  recentSection.classList.add('recent-collapsed');
+  recentToggleBtn.setAttribute('aria-expanded', 'false');
+  recentChevronIcon.classList.replace('bi-chevron-up', 'bi-chevron-down');
+
+  /* Show teaser, hide filter */
+  recentFilterWrap.classList.add('d-none');
+  recentTeaser.textContent = `${recentSongs.length} songs — click to expand`;
+  recentTeaser.classList.remove('d-none');
+}
+
+/**
+ * Expands the recent section body with a smooth slide-down animation.
+ * Restores the filter input.
+ * @param {boolean} [animate=true]
+ */
+function expandRecentSection(animate = true) {
+  if (!recentSection.classList.contains('recent-collapsed') && animate) return; /* already open */
+
+  const body = recentBody;
+
+  recentSection.classList.remove('recent-collapsed');
+  recentToggleBtn.setAttribute('aria-expanded', 'true');
+  recentChevronIcon.classList.replace('bi-chevron-down', 'bi-chevron-up');
+
+  /* Hide teaser, restore filter */
+  recentTeaser.classList.add('d-none');
+  recentFilterWrap.classList.remove('d-none');
+
+  if (animate) {
+    /* Measure natural height */
+    body.style.height = body.scrollHeight + 'px';
+    body.addEventListener('transitionend', function onEnd() {
+      body.style.height = ''; /* let CSS auto-size after animation */
+      body.removeEventListener('transitionend', onEnd);
+    }, { once: true });
+  } else {
+    body.style.height = '';
+  }
+}
+
+/** Toggles between collapsed and expanded. */
+function toggleRecentSection() {
+  if (recentSection.classList.contains('recent-collapsed')) {
+    expandRecentSection();
+  } else {
+    collapseRecentSection();
+  }
+}
+
+/**
+ * Filters recentSongs by a query string across title, artist,
+ * album, featuring, genre, and category fields.
+ * @param {string} q  Already-normalized query
+ * @returns {object[]} Matching song objects
+ */
+function filterRecentSongs(q) {
+  if (!q) return recentSongs;
+  return recentSongs.filter(song => {
+    return (
+      normalize(song.title).includes(q)      ||
+      normalize(song.artist).includes(q)     ||
+      normalize(song.album     || '').includes(q) ||
+      normalize(song.featuring || '').includes(q) ||
+      normalize(song.genre     || '').includes(q) ||
+      normalize(song.category  || '').includes(q)
+    );
+  });
+}
+
+/**
+ * Renders a list of songs into the recentGrid and updates the count bar.
+ * Reuses the same card-building logic as renderResults().
+ * @param {object[]} songs
+ */
+function buildRecentGrid(songs) {
+  recentGrid.innerHTML = '';
+  recentEmptyState.classList.add('d-none');
+
+  if (songs.length === 0) {
+    recentEmptyState.classList.remove('d-none');
+    recentCountBar.innerHTML = '';
+    return;
+  }
+
+  /* Count bar */
+  const q = normalize(recentFilterInput.value);
+  recentCountBar.innerHTML = q
+    ? `<i class="bi bi-funnel-fill me-1"></i> <strong>${songs.length}</strong> of ${recentSongs.length} recent songs match <em>"${escHtml(q)}"</em>`
+    : `<i class="bi bi-clock-history me-1"></i> Showing the <strong>${songs.length}</strong> most recently added songs`;
+
+  const audioNodes = [];
+
+  songs.forEach((song, idx) => {
+    const isImageUrl = src =>
+      src && src.trim() !== '' &&
+      !(src.includes('/video/upload/') && !src.match(/\.(jpg|jpeg|png|webp|gif)$/i));
+
+    const artHTML = isImageUrl(song.songArt)
+      ? `<img
+           src="${escAttr(song.songArt)}"
+           alt="${escAttr(song.title)} cover art"
+           class="card-art"
+           loading="lazy"
+           onerror="this.outerHTML='<div class=card-art-fallback><i class=\\'bi bi-music-note-beamed\\'></i></div>'"
+         />`
+      : `<div class="card-art-fallback"><i class="bi bi-music-note-beamed"></i></div>`;
+
+    const featuringChips = (song.featuring || '')
+      .split(/,|&|\bfeat\.?\b|\bft\.?\b/i)
+      .map(n => n.trim())
+      .filter(Boolean)
+      .map(name =>
+        `<button class="tag-chip tag-chip--artist" data-field="artist" data-value="${escAttr(name)}" title="Filter by ${escAttr(name)}">${escHtml(name)}</button>`
+      ).join('');
+
+    const chip = (field, value, extraCls = '') => {
+      if (!value || !value.trim()) return escHtml(value);
+      return `<button class="tag-chip ${extraCls}" data-field="${field}" data-value="${escAttr(value)}" title="Filter by ${escAttr(value)}">${escHtml(value)}</button>`;
+    };
+
+    const rows = [
+      { label: 'Artist',    valueHtml: `<span class="detail-value detail-artist">${escHtml(song.artist)}</span>`,                                           raw: song.artist },
+      { label: 'Featuring', valueHtml: featuringChips ? `<span class="detail-value tag-chips-wrap">${featuringChips}</span>` : '',                            raw: song.featuring || '' },
+      { label: 'Category',  valueHtml: `<span class="detail-value detail-category">${chip('category', song.category || '', 'tag-chip--category')}</span>`,   raw: song.category || '' },
+      { label: 'Genre',     valueHtml: `<span class="detail-value">${chip('genre',    song.genre    || '', 'tag-chip--genre')}</span>`,                      raw: song.genre    || '' },
+      { label: 'Album',     valueHtml: `<span class="detail-value">${chip('album',    song.album    || '', 'tag-chip--album')}</span>`,                      raw: song.album    || '' },
+      { label: 'Released',  valueHtml: `<span class="detail-value">${chip('released', song.released || '', 'tag-chip--released')}</span>`,                  raw: song.released || '' },
+    ]
+      .filter(r => r.raw.trim() !== '')
+      .map(r => `
+      <li class="detail-row">
+        <span class="detail-label">${r.label}</span>
+        ${r.valueHtml}
+      </li>`)
+      .join('');
+
+    const hasAudio = isValidAudioUrl(song.songUrl);
+    const audioHTML = hasAudio
+      ? `<audio class="card-audio" controls preload="none" data-card-index="recent-${idx}">
+           <source src="${escAttr(song.songUrl)}" type="audio/mpeg" />
+         </audio>`
+      : `<p class="no-preview"><i class="bi bi-slash-circle me-1"></i>Preview unavailable</p>`;
+
+    const dlFilename = song.title + ' - ' + song.artist + '.mp3';
+    const downloadHTML = hasAudio
+      ? `<button
+           class="btn-download"
+           data-url="${escAttr(song.songUrl)}"
+           data-filename="${escAttr(dlFilename)}">
+           <i class="bi bi-download me-2"></i>Download ${escHtml(song.artist)} – ${escHtml(song.title)}
+         </button>`
+      : '';
+
+    /* NEW badge on every recent card */
+    const newBadge = `<span class="recent-new-badge"><i class="bi bi-lightning-charge-fill me-1"></i>NEW</span>`;
+
+    const cardEl = document.createElement('div');
+    cardEl.className = 'song-card';
+    cardEl.style.animationDelay = `${Math.min(idx * 0.04, 0.5)}s`;
+    cardEl.dataset.cardIndex = `recent-${idx}`;
+    cardEl.innerHTML = `
+      <div class="card-num" data-num="${idx + 1}">${idx + 1}</div>
+      ${newBadge}
+      <div class="card-art-wrap">
+        ${artHTML}
+      </div>
+      <div class="card-body">
+        <h2 class="card-heading">
+          <i class="bi bi-download me-2 card-heading-icon"></i>${escHtml(song.artist)} – ${escHtml(song.title)}
+        </h2>
+        <ul class="detail-list">
+          ${rows}
+        </ul>
+        <div class="card-player">
+          ${audioHTML}
+        </div>
+        ${downloadHTML}
+      </div>`;
+
+    recentGrid.appendChild(cardEl);
+
+    const audioEl = cardEl.querySelector('audio.card-audio');
+    audioNodes.push(audioEl);
+  });
+
+  wireAudioAutoplay(audioNodes);
 }
 
 /* ── Search / Filter ───────────────────────────── */
+
 function runSearch() {
   const qTitle  = normalize(searchTitleEl.value);
   const qArtist = normalize(searchArtistEl.value);
@@ -159,6 +452,9 @@ function runSearch() {
   searchTitleEl.value  = '';
   searchArtistEl.value = '';
   searchAlbumEl.value  = '';
+
+  /* Collapse the recently released section to give results more focus */
+  collapseRecentSection();
 }
 
 /* ── Tag-chip filter ────────────────────────────── */
@@ -236,6 +532,9 @@ function clearSearch() {
   renderTagBar();
   showState('idle');
   setStatus(`Catalogue loaded — ${allSongs.length} songs available. Use the search above to find your music.`);
+
+  /* Re-expand the recently released section */
+  expandRecentSection();
 }
 
 /* ── Render (card grid) ──────────────────────────── */
@@ -369,28 +668,49 @@ function renderResults(songs, query = {}) {
   );
 }
 
-/* ── Autoplay wiring ─────────────────────────────── */
+/* ── Autoplay wiring ──────────────────────────────── */
 /**
- * Given the ordered list of <audio> nodes (null entries for songs with no
- * preview), attach:
- *  • 'play'  — pauses every other audio and updates the now-playing highlight
- *  • 'pause' / 'ended' — removes the now-playing highlight
- *  • 'ended' — advances to the next playable audio in the list
+ * Registers a batch of <audio> nodes from one section into the global
+ * registry and attaches event listeners so that:
+ *  • 'play'  — pauses EVERY other audio in BOTH sections (global registry),
+ *              then highlights the active card in whichever grid it belongs to
+ *  • 'pause' / 'ended' — removes the now-playing highlight from that card
+ *  • 'ended' — advances to the next playable audio within the same section batch
+ *
+ * @param {(HTMLAudioElement|null)[]} audioNodes  Ordered array for one section
+ *        (null entries for songs without a preview URL)
  */
 function wireAudioAutoplay(audioNodes) {
 
-  function setNowPlaying(idx) {
-    /* Remove highlight from all cards */
-    resultsGrid.querySelectorAll('.song-card').forEach(card => {
-      card.classList.remove('now-playing');
-      const badge = card.querySelector('.card-num');
-      if (badge) badge.innerHTML = badge.dataset.num; /* restore track number */
+  /* Prune any nodes that are no longer attached to the document */
+  for (const node of globalAudioRegistry) {
+    if (!document.contains(node)) globalAudioRegistry.delete(node);
+  }
+
+  /* Register each new node */
+  audioNodes.forEach(a => { if (a) globalAudioRegistry.add(a); });
+
+  /* Resolves the grid container that owns a given card index string */
+  function ownerGrid(cardIndex) {
+    /* Recent cards use "recent-N" indices; search results use plain numbers */
+    return String(cardIndex).startsWith('recent-') ? recentGrid : resultsGrid;
+  }
+
+  function setNowPlaying(cardIndex) {
+    /* Clear highlight on EVERY card across both grids */
+    [resultsGrid, recentGrid].forEach(grid => {
+      grid.querySelectorAll('.song-card').forEach(card => {
+        card.classList.remove('now-playing');
+        const badge = card.querySelector('.card-num');
+        if (badge) badge.innerHTML = badge.dataset.num; /* restore track number */
+      });
     });
 
-    if (idx === null) return;
+    if (cardIndex === null) return;
 
-    /* Highlight the active card */
-    const card = resultsGrid.querySelector(`.song-card[data-card-index="${idx}"]`);
+    /* Highlight the active card inside its own grid */
+    const grid = ownerGrid(cardIndex);
+    const card = grid.querySelector(`.song-card[data-card-index="${cardIndex}"]`);
     if (!card) return;
     card.classList.add('now-playing');
     const badge = card.querySelector('.card-num');
@@ -405,12 +725,14 @@ function wireAudioAutoplay(audioNodes) {
   audioNodes.forEach((audio, idx) => {
     if (!audio) return; /* no preview for this song */
 
-    /* Single-playback: pause all others when this one plays */
+    const cardIndex = audio.dataset.cardIndex;
+
+    /* ── GLOBAL single-playback: pause every audio across both sections ── */
     audio.addEventListener('play', () => {
-      audioNodes.forEach((other, otherIdx) => {
-        if (other && otherIdx !== idx && !other.paused) other.pause();
-      });
-      setNowPlaying(idx);
+      for (const other of globalAudioRegistry) {
+        if (other !== audio && !other.paused) other.pause();
+      }
+      setNowPlaying(cardIndex);
     });
 
     /* Remove highlight when paused manually */
@@ -421,15 +743,16 @@ function wireAudioAutoplay(audioNodes) {
       }, 50);
     });
 
-    /* Auto-advance when the song finishes */
+    /* Auto-advance within the same section batch */
     audio.addEventListener('ended', () => {
-      /* Find the next index that has a playable audio */
       for (let next = idx + 1; next < audioNodes.length; next++) {
         const nextAudio = audioNodes[next];
         if (!nextAudio) continue;
 
-        /* Scroll the next card into view */
-        const nextCard = resultsGrid.querySelector(`.song-card[data-card-index="${next}"]`);
+        /* Scroll the next card into view — use the correct owner grid */
+        const nextCardIndex = nextAudio.dataset.cardIndex;
+        const nextGrid = ownerGrid(nextCardIndex);
+        const nextCard = nextGrid.querySelector(`.song-card[data-card-index="${nextCardIndex}"]`);
         if (nextCard) nextCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
 
         /* Load and play */

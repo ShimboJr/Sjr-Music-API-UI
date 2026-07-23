@@ -799,6 +799,288 @@ audio.card-audio {
   pointer-events: none;
 }
 
+/* ═══════════════════════════════════════════════
+   RECENTLY RELEASED SECTION
+   ═══════════════════════════════════════════════ */
+
+/* ── Section wrapper ─────────────────────────── */
+.recent-section {
+  background: linear-gradient(180deg, rgba(124,58,237,.06) 0%, transparent 100%);
+  border: 1px solid rgba(124, 58, 237, .18);
+  border-radius: var(--radius-xl);
+  padding: 2rem 1.75rem 2rem;
+  position: relative;
+  /* NOTE: overflow must NOT be hidden here so .recent-body can animate */
+  transition: padding var(--transition), border-color var(--transition);
+}
+
+/* Collapsed state modifier */
+.recent-section.recent-collapsed {
+  padding-bottom: 1.25rem;
+  border-color: rgba(124, 58, 237, .1);
+}
+
+/* ── Collapsible body ────────────────────────── */
+.recent-body {
+  overflow: hidden;
+  height: auto;
+  transition: height .38s cubic-bezier(.4, 0, .2, 1);
+}
+
+.recent-section::before {
+  content: '';
+  position: absolute;
+  top: -40px;
+  right: -40px;
+  width: 200px;
+  height: 200px;
+  background: radial-gradient(circle, rgba(168,85,247,.12) 0%, transparent 70%);
+  pointer-events: none;
+}
+
+/* ── Section header row ──────────────────────── */
+.recent-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+  cursor: pointer;
+  user-select: none;
+  border-radius: var(--radius-md);
+  transition: background var(--transition);
+}
+
+.recent-section-header:hover {
+  background: rgba(124, 58, 237, .05);
+}
+
+/* Right-side group: teaser + filter + chevron */
+.recent-header-right {
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+  flex-wrap: nowrap;
+}
+
+/* ── Chevron toggle button ────────────────────── */
+.recent-chevron {
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  border: 1px solid rgba(124, 58, 237, .3);
+  background: rgba(124, 58, 237, .08);
+  color: var(--accent-2);
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: .85rem;
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.recent-section-header:hover .recent-chevron {
+  background: rgba(124, 58, 237, .2);
+  border-color: var(--accent);
+}
+
+.recent-chevron i {
+  transition: transform .35s cubic-bezier(.4, 0, .2, 1);
+}
+
+.recent-collapsed .recent-chevron i {
+  transform: rotate(0deg);
+}
+
+/* ── Teaser pill (shown while collapsed) ─────── */
+.recent-teaser {
+  font-size: .78rem;
+  font-weight: 600;
+  color: var(--accent-2);
+  background: rgba(124, 58, 237, .12);
+  border: 1px solid rgba(124, 58, 237, .28);
+  border-radius: 999px;
+  padding: .25em .85em;
+  white-space: nowrap;
+  letter-spacing: .01em;
+}
+
+/* Collapsed: hide the margin below the header */
+.recent-collapsed .recent-section-header {
+  margin-bottom: 0;
+}
+
+.recent-title-group {
+  display: flex;
+  align-items: center;
+  gap: .85rem;
+}
+
+.recent-badge {
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  background: linear-gradient(135deg, #f59e0b, #ef4444);
+  border-radius: var(--radius-md);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.3rem;
+  color: #fff;
+  box-shadow: 0 0 20px rgba(245,158,11,.35);
+}
+
+.recent-heading {
+  font-size: 1.25rem;
+  font-weight: 800;
+  color: var(--text-1);
+  margin: 0;
+  letter-spacing: -.3px;
+}
+
+.recent-sub {
+  font-size: .8rem;
+  color: var(--text-3);
+  margin: .15rem 0 0;
+}
+
+/* ── Filter input ────────────────────────────── */
+.recent-filter-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  min-width: 240px;
+  max-width: 340px;
+}
+
+.recent-filter-icon {
+  position: absolute;
+  left: .85rem;
+  color: var(--text-3);
+  font-size: .9rem;
+  pointer-events: none;
+  transition: var(--transition);
+}
+
+.recent-filter-input {
+  width: 100%;
+  background: rgba(255,255,255,.05);
+  border: 1px solid rgba(124,58,237,.25);
+  border-radius: 999px;
+  color: var(--text-1);
+  padding: .55rem 2.4rem .55rem 2.2rem;
+  font-family: var(--font);
+  font-size: .88rem;
+  transition: var(--transition);
+}
+
+.recent-filter-input::placeholder {
+  color: var(--text-3);
+}
+
+.recent-filter-input:focus {
+  outline: none;
+  border-color: var(--border-focus);
+  background: rgba(124,58,237,.07);
+  box-shadow: 0 0 0 3px rgba(124,58,237,.15);
+}
+
+.recent-filter-input:focus ~ .recent-filter-icon,
+.recent-filter-wrap:focus-within .recent-filter-icon {
+  color: var(--accent-2);
+}
+
+.recent-filter-clear {
+  position: absolute;
+  right: .6rem;
+  width: 22px;
+  height: 22px;
+  border: none;
+  background: rgba(255,255,255,.12);
+  color: var(--text-2);
+  border-radius: 50%;
+  cursor: pointer;
+  font-size: .85rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  line-height: 1;
+  transition: var(--transition);
+}
+
+.recent-filter-clear:hover {
+  background: #ef4444;
+  color: #fff;
+}
+
+/* ── Count / info bar ────────────────────────── */
+.recent-count-bar {
+  font-size: .82rem;
+  color: var(--text-2);
+  margin-bottom: 1rem;
+  padding: .5rem .9rem;
+  background: rgba(255,255,255,.03);
+  border-radius: var(--radius-sm);
+  border-left: 3px solid var(--accent);
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  gap: .35rem;
+}
+
+.recent-count-bar strong {
+  color: var(--text-1);
+  font-weight: 700;
+}
+
+.recent-count-bar em {
+  font-style: normal;
+  color: var(--accent-2);
+}
+
+/* ── Empty filter state ──────────────────────── */
+.recent-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: .6rem;
+  padding: 2.5rem;
+  color: var(--text-3);
+  font-size: .9rem;
+  font-weight: 500;
+  background: rgba(255,255,255,.02);
+  border-radius: var(--radius-md);
+  border: 1px dashed rgba(255,255,255,.08);
+}
+
+.recent-empty i {
+  font-size: 1.3rem;
+  opacity: .5;
+}
+
+/* ── NEW badge on recent cards ───────────────── */
+.recent-new-badge {
+  position: absolute;
+  top: .7rem;
+  left: .75rem;
+  z-index: 3;
+  background: linear-gradient(135deg, #f59e0b, #ef4444);
+  color: #fff;
+  font-size: .62rem;
+  font-weight: 800;
+  letter-spacing: .07em;
+  padding: .22em .6em;
+  border-radius: 999px;
+  text-transform: uppercase;
+  box-shadow: 0 2px 10px rgba(245,158,11,.45);
+  display: inline-flex;
+  align-items: center;
+}
+
 /* ── Footer ───────────────────────────────────── */
 .site-footer-bar {
   background: var(--bg-surface);
@@ -946,6 +1228,21 @@ audio.card-audio {
 
   .card-heading {
     font-size: .85rem;
+  }
+
+  /* Recent section responsive */
+  .recent-section {
+    padding: 1.25rem 1rem;
+  }
+
+  .recent-section-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .recent-filter-wrap {
+    width: 100%;
+    max-width: 100%;
   }
 }
 
