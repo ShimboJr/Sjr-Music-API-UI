@@ -971,8 +971,8 @@ function showState(state) {
   resultsWrapper.classList.add('d-none');
 
   if (state === 'loading') loadingState.classList.remove('d-none');
-  if (state === 'error') errorState.classList.remove('d-none');
-  if (state === 'empty') emptyState.classList.remove('d-none');
+  if (state === 'error')   errorState.classList.remove('d-none');
+  if (state === 'empty')   emptyState.classList.remove('d-none');
   if (state === 'results') resultsWrapper.classList.remove('d-none');
 }
 
@@ -1009,46 +1009,92 @@ function isValidAudioUrl(url = '') {
   return url.trim().startsWith('http');
 }
 
-/* ── Blob-based download (cross-origin safe) ─────── */
+/* ── Download ─────────────────────────────────────── */
+
+
+/**
+ * Streams the audio file chunk-by-chunk via the Fetch API, updating the
+ * button with live download progress.  Once all bytes are received a blob
+ * URL is created and an invisible anchor click triggers the browser's native
+ * Save-As dialog — the correct cross-origin-safe approach, because Chrome 65+
+ * ignores the `download` attribute on cross-origin <a> tags.
+ *
+ * Progress display:
+ *   • When the server sends Content-Length → shows "34%" style progress.
+ *   • When Content-Length is absent       → shows "1.2 MB" received so far.
+ *
+ * @param {string}      url       Remote audio URL
+ * @param {string}      filename  Desired local filename
+ * @param {HTMLElement} btn       Download button (its label is updated live)
+ */
+
 async function downloadSong(url, filename, btn) {
   const original = btn.innerHTML;
+  btn.disabled  = true;
+  btn.innerHTML = '<i class="bi bi-arrow-down-circle me-2"></i>0%';
 
   try {
-    btn.disabled = true;
-    btn.innerHTML = '<i class="bi bi-hourglass-split me-2"></i>Downloading…';
-
     const response = await fetch(url);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
-    const blob = await response.blob();
+    /* Read total size from the response headers (may not always be present) */
+    const contentLength = response.headers.get('Content-Length');
+    const total = contentLength ? parseInt(contentLength, 10) : 0;
+
+    const reader   = response.body.getReader();
+    const chunks   = [];
+    let   received = 0;
+
+    /* Stream body and update button label in real time */
+    while (true) { // eslint-disable-line no-constant-condition
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      chunks.push(value);
+      received += value.length;
+
+      if (total > 0) {
+        const pct = Math.min(Math.round((received / total) * 100), 99);
+        btn.innerHTML = `<i class="bi bi-arrow-down-circle me-2"></i>${pct}%`;
+      } else {
+        const mb = (received / (1024 * 1024)).toFixed(1);
+        btn.innerHTML = `<i class="bi bi-arrow-down-circle me-2"></i>${mb} MB`;
+      }
+    }
+
+    /* All bytes received — assemble into a blob and trigger Save-As */
+    const blob    = new Blob(chunks, { type: 'audio/mpeg' });
     const blobUrl = URL.createObjectURL(blob);
 
     const anchor = document.createElement('a');
-    anchor.href = blobUrl;
-    anchor.download = filename;
+    anchor.href          = blobUrl;
+    anchor.download      = filename;
     anchor.style.display = 'none';
     document.body.appendChild(anchor);
     anchor.click();
     document.body.removeChild(anchor);
 
-    setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
+    /* Release the object URL after the browser has had time to use it */
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 15_000);
 
-    btn.innerHTML = '<i class="bi bi-check-circle-fill me-2"></i>Done ✓';
-    btn.style.color = '#22c55e';
+    btn.innerHTML         = '<i class="bi bi-check-circle-fill me-2"></i>Done ✓';
+    btn.style.color       = '#22c55e';
     btn.style.borderColor = '#22c55e';
-    btn.style.background = 'rgba(34,197,94,.1)';
+    btn.style.background  = 'rgba(34,197,94,.1)';
+
   } catch (err) {
     console.error('Download failed:', err);
-    btn.innerHTML = '<i class="bi bi-x-circle me-2"></i>Failed';
-    btn.style.color = '#ef4444';
+    btn.innerHTML         = '<i class="bi bi-x-circle me-2"></i>Failed';
+    btn.style.color       = '#ef4444';
     btn.style.borderColor = '#ef4444';
+
   } finally {
     setTimeout(() => {
-      btn.innerHTML = original;
-      btn.disabled = false;
-      btn.style.color = '';
+      btn.innerHTML         = original;
+      btn.disabled          = false;
+      btn.style.color       = '';
       btn.style.borderColor = '';
-      btn.style.background = '';
+      btn.style.background  = '';
     }, 2500);
   }
 }
