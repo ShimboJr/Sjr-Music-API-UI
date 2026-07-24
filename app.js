@@ -372,7 +372,7 @@ function buildRecentGrid(songs) {
          </audio>`
       : `<p class="no-preview"><i class="bi bi-slash-circle me-1"></i>Preview unavailable</p>`;
 
-    const dlFilename = song.title + ' - ' + song.artist + ' ft. ' + song.featuring + '.mp3';
+    const dlFilename = song.title + ' - ' + song.artist + (song.featuring && song.featuring.trim() ? ' ft. ' + song.featuring : '') + '.mp3';
     const downloadHTML = hasAudio
       ? `<button
            class="btn-download"
@@ -609,7 +609,7 @@ function renderResults(songs, query = {}) {
       : `<p class="no-preview"><i class="bi bi-slash-circle me-1"></i>Preview unavailable</p>`;
 
     /* ── Download button ── */
-    const dlFilename = song.title + ' - ' + song.artist + ' ft. ' + song.featuring + '.mp3';
+    const dlFilename = song.title + ' - ' + song.artist + (song.featuring && song.featuring.trim() ? ' ft. ' + song.featuring : '') + '.mp3';
     const downloadHTML = hasAudio
       ? `<button
            class="btn-download"
@@ -669,13 +669,40 @@ function renderResults(songs, query = {}) {
 }
 
 /* ── Autoplay wiring ──────────────────────────────── */
+
+/**
+ * How many seconds before the end of the current track the crossfade window opens.
+ * Matches Spotify's default crossfade behaviour.
+ */
+const CROSSFADE_DURATION = 5; /* seconds */
+
+/**
+ * Module-level sentinel that tracks an in-progress crossfade so the global
+ * single-playback enforcer knows NOT to pause the fading-out track when the
+ * incoming track fires its 'play' event.
+ *
+ *  { from: HTMLAudioElement, to: HTMLAudioElement }  — crossfade in progress
+ *  null                                              — no crossfade active
+ */
+let activeCrossfadePair = null;
+
 /**
  * Registers a batch of <audio> nodes from one section into the global
- * registry and attaches event listeners so that:
- *  • 'play'  — pauses EVERY other audio in BOTH sections (global registry),
- *              then highlights the active card in whichever grid it belongs to
- *  • 'pause' / 'ended' — removes the now-playing highlight from that card
- *  • 'ended' — advances to the next playable audio within the same section batch
+ * registry and wires three behaviours:
+ *
+ *  1. Global single-playback  — 'play' pauses every other track, EXCEPT the
+ *     fading-out half of an active crossfade (activeCrossfadePair.from).
+ *
+ *  2. Deferred next-track preload — after the current track fires 'canplaythrough'
+ *     (the browser confirms it has enough data to play through without stalling)
+ *     the next track's <audio> is switched to preload="auto" and buffered silently.
+ *     This prevents starving the current track's own buffer.
+ *
+ *  3. Spotify-style crossfade — a 'timeupdate' watcher triggers once with
+ *     ≤ CROSSFADE_DURATION seconds remaining.  The current track KEEPS PLAYING
+ *     and fades to silence while the next track (already buffered) starts at
+ *     volume 0 and fades up to full — both ramps running in parallel via
+ *     requestAnimationFrame with an ease-in-out curve.
  *
  * @param {(HTMLAudioElement|null)[]} audioNodes  Ordered array for one section
  *        (null entries for songs without a preview URL)
@@ -690,25 +717,23 @@ function wireAudioAutoplay(audioNodes) {
   /* Register each new node */
   audioNodes.forEach(a => { if (a) globalAudioRegistry.add(a); });
 
-  /* Resolves the grid container that owns a given card index string */
+  /* ── Shared helpers ──────────────────────────────── */
+
   function ownerGrid(cardIndex) {
-    /* Recent cards use "recent-N" indices; search results use plain numbers */
     return String(cardIndex).startsWith('recent-') ? recentGrid : resultsGrid;
   }
 
   function setNowPlaying(cardIndex) {
-    /* Clear highlight on EVERY card across both grids */
     [resultsGrid, recentGrid].forEach(grid => {
       grid.querySelectorAll('.song-card').forEach(card => {
         card.classList.remove('now-playing');
         const badge = card.querySelector('.card-num');
-        if (badge) badge.innerHTML = badge.dataset.num; /* restore track number */
+        if (badge) badge.innerHTML = badge.dataset.num;
       });
     });
 
     if (cardIndex === null) return;
 
-    /* Highlight the active card inside its own grid */
     const grid = ownerGrid(cardIndex);
     const card = grid.querySelector(`.song-card[data-card-index="${cardIndex}"]`);
     if (!card) return;
@@ -722,49 +747,220 @@ function wireAudioAutoplay(audioNodes) {
       </span>`;
   }
 
+  /**
+   * Animate volume from `from` → `to` over `durationMs` milliseconds using an
+   * ease-in-out curve identical to Spotify's crossfade envelope.
+   * The audio element continues playing — only its volume changes.
+   */
+  function rampVolume(audioEl, from, to, durationMs) {
+    if (!audioEl) return;
+    if (durationMs <= 0) { audioEl.volume = Math.max(0, Math.min(1, to)); return; }
+
+    const startTime = performance.now();
+    audioEl.volume = Math.max(0, Math.min(1, from));
+
+    function step(now) {
+      const progress = Math.min((now - startTime) / durationMs, 1);
+      /* Cubic ease-in-out — gentle start, gentle finish */
+      const eased = progress < 0.5
+        ? 4 * progress * progress * progress
+        : 1 - Math.pow(-2 * progress + 2, 3) / 2;
+      audioEl.volume = Math.max(0, Math.min(1, from + (to - from) * eased));
+      if (progress < 1) requestAnimationFrame(step);
+      else audioEl.volume = Math.max(0, Math.min(1, to));
+    }
+    requestAnimationFrame(step);
+  }
+
+  function scrollToCard(audio) {
+    if (!audio) return;
+    const ci = audio.dataset.cardIndex;
+    const card = ownerGrid(ci).querySelector(`.song-card[data-card-index="${ci}"]`);
+    if (card) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+
+  /* ── Per-node wiring ─────────────────────────────── */
+
   audioNodes.forEach((audio, idx) => {
-    if (!audio) return; /* no preview for this song */
+    if (!audio) return;
 
     const cardIndex = audio.dataset.cardIndex;
+    let crossfadeTriggered = false;  /* guards against double-firing */
+    let preloadScheduled = false;    /* guards against scheduling preload twice */
 
-    /* ── GLOBAL single-playback: pause every audio across both sections ── */
+    /* ────────────────────────────────────────────────
+       'play' event
+       • Enforces global single-playback (pauses all others).
+         Exception: if a crossfade is active and the other track is the
+         fading-out half (activeCrossfadePair.from), it must NOT be paused —
+         it still needs to play out its final seconds while fading to silence.
+       • Resets per-play state.
+       • Schedules deferred preload of the next track.
+    ──────────────────────────────────────────────── */
     audio.addEventListener('play', () => {
       for (const other of globalAudioRegistry) {
-        if (other !== audio && !other.paused) other.pause();
+        if (other === audio) continue;
+        if (other.paused) continue;
+
+        /* Keep fading-out track alive during a crossfade */
+        if (activeCrossfadePair &&
+          activeCrossfadePair.from === other &&
+          activeCrossfadePair.to === audio) continue;
+
+        other.pause();
       }
+
       setNowPlaying(cardIndex);
+
+      /* Fresh-play resets */
+      crossfadeTriggered = false;
+      preloadScheduled = false;
+      audio.volume = 1;
+
+      /* ── Deferred preload: wait until this track has enough data ──
+         'canplaythrough' fires when the browser estimates it can play
+         to the end of the file without stopping to buffer.  Only then
+         do we start buffering the next track, so we don't fight for
+         bandwidth with the currently streaming audio.                 */
+      scheduleNextPreload(audio, idx, audioNodes, () => {
+        preloadScheduled = true;
+      });
     });
 
-    /* Remove highlight when paused manually */
+    /* ────────────────────────────────────────────────
+       'pause' event
+       Clear the now-playing indicator, but NOT if this audio is the
+       fading-out half of an active crossfade — it gets paused naturally
+       by the browser when it reaches the end of the file.
+    ──────────────────────────────────────────────── */
     audio.addEventListener('pause', () => {
-      /* Small delay so 'ended' (which fires pause first) can override */
       setTimeout(() => {
+        /* Don't steal the highlight from the incoming track mid-crossfade */
+        if (activeCrossfadePair && activeCrossfadePair.from === audio) return;
         if (audio.ended || audio.paused) setNowPlaying(null);
       }, 50);
     });
 
-    /* Auto-advance within the same section batch */
+    /* ────────────────────────────────────────────────
+       'timeupdate' event — Spotify-style crossfade
+       Fires many times per second; we only act once per play-through.
+
+       When ≤ CROSSFADE_DURATION seconds remain:
+         • Mark activeCrossfadePair so the 'play' enforcer on the next
+           track won't kill this track.
+         • Start the next track at volume 0.
+         • Ramp this track 1→0 and next track 0→1 simultaneously.
+         • This track KEEPS PLAYING — it fades to silence and the browser
+           fires 'ended' naturally when it reaches the end of the file.
+    ──────────────────────────────────────────────── */
+    audio.addEventListener('timeupdate', () => {
+      if (crossfadeTriggered) return;
+      if (!audio.duration || !isFinite(audio.duration)) return;
+
+      const remaining = audio.duration - audio.currentTime;
+      if (remaining > CROSSFADE_DURATION) return;
+
+      /* Find next playable track */
+      let nextAudio = null;
+      for (let n = idx + 1; n < audioNodes.length; n++) {
+        if (audioNodes[n]) { nextAudio = audioNodes[n]; break; }
+      }
+      if (!nextAudio) return; /* last track — let it finish naturally */
+
+      crossfadeTriggered = true;
+
+      const fadeDurationMs = remaining * 1000;
+
+      /* Register the pair BEFORE calling nextAudio.play() */
+      activeCrossfadePair = { from: audio, to: nextAudio };
+
+      scrollToCard(nextAudio);
+
+      /* Start next track silently — it's already buffered */
+      nextAudio.volume = 0;
+      nextAudio.currentTime = 0;
+      nextAudio.play().catch(err => console.warn('[Crossfade] Autoplay blocked:', err));
+
+      /* Parallel volume ramps — current fades out, next fades in */
+      rampVolume(audio, 1, 0, fadeDurationMs);
+      rampVolume(nextAudio, 0, 1, fadeDurationMs);
+
+      console.info(`[Crossfade] Overlapping ${remaining.toFixed(1)}s window started.`);
+    });
+
+    /* ────────────────────────────────────────────────
+       'ended' event
+       • Clears activeCrossfadePair when the fading-out track finishes.
+       • Fallback auto-advance if crossfade never fired (short clip / seek
+         to end / browser didn't know duration until it was too late).
+    ──────────────────────────────────────────────── */
     audio.addEventListener('ended', () => {
-      for (let next = idx + 1; next < audioNodes.length; next++) {
-        const nextAudio = audioNodes[next];
-        if (!nextAudio) continue;
+      /* Release the crossfade lock so normal enforcement resumes */
+      if (activeCrossfadePair && activeCrossfadePair.from === audio) {
+        activeCrossfadePair = null;
+      }
 
-        /* Scroll the next card into view — use the correct owner grid */
-        const nextCardIndex = nextAudio.dataset.cardIndex;
-        const nextGrid = ownerGrid(nextCardIndex);
-        const nextCard = nextGrid.querySelector(`.song-card[data-card-index="${nextCardIndex}"]`);
-        if (nextCard) nextCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      if (crossfadeTriggered) return; /* crossfade handled the transition */
 
-        /* Load and play */
-        nextAudio.load();
-        nextAudio.play().catch(err => console.warn('Autoplay blocked by browser:', err));
+      /* Fallback: advance normally */
+      for (let n = idx + 1; n < audioNodes.length; n++) {
+        const next = audioNodes[n];
+        if (!next) continue;
+
+        scrollToCard(next);
+        next.volume = 1;
+        next.load();
+        next.play().catch(err => console.warn('[Fallback] Autoplay blocked:', err));
         return;
       }
 
-      /* No next song — clear highlight */
       setNowPlaying(null);
     });
   });
+}
+
+/* ── Deferred next-track preload helper ─────────────── */
+/**
+ * Waits until `currentAudio` fires 'canplaythrough' — the browser's signal
+ * that it has buffered enough of the current track to play without stalling —
+ * then silently pre-buffers the next track by switching it to preload="auto".
+ *
+ * This prevents the preload from competing for bandwidth with the track that
+ * is actively streaming and buffering.
+ *
+ * @param {HTMLAudioElement}         currentAudio  The track currently playing
+ * @param {number}                   idx           Its index in audioNodes
+ * @param {(HTMLAudioElement|null)[]} audioNodes   The full section batch
+ * @param {() => void}               onScheduled  Callback when preload starts
+ */
+function scheduleNextPreload(currentAudio, idx, audioNodes, onScheduled) {
+  /* Find the next audio node */
+  let nextAudio = null;
+  for (let n = idx + 1; n < audioNodes.length; n++) {
+    if (audioNodes[n]) { nextAudio = audioNodes[n]; break; }
+  }
+  if (!nextAudio) return; /* nothing to preload */
+  if (nextAudio.preload === 'auto') return; /* already scheduled */
+
+  function startPreload() {
+    if (nextAudio.preload === 'auto') return; /* guard against double-call */
+    nextAudio.preload = 'auto';
+    nextAudio.load();
+    onScheduled?.();
+    console.info(
+      '[Preload] Buffering next track (deferred after canplaythrough):',
+      nextAudio.querySelector('source')?.src || '—'
+    );
+  }
+
+  /* If already fully buffered or past the readiness threshold, go immediately */
+  if (currentAudio.readyState >= HTMLMediaElement.HAVE_ENOUGH_DATA) {
+    startPreload();
+    return;
+  }
+
+  /* Otherwise wait for the 'canplaythrough' event */
+  currentAudio.addEventListener('canplaythrough', startPreload, { once: true });
 }
 
 /* ── UI state manager ───────────────────────────── */
