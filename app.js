@@ -13,38 +13,38 @@ const CORS_PROXIES = [
 ];
 
 /* ── DOM references ─────────────────────────────── */
-const searchTitleEl  = document.getElementById('searchTitle');
+const searchTitleEl = document.getElementById('searchTitle');
 const searchArtistEl = document.getElementById('searchArtist');
-const searchAlbumEl  = document.getElementById('searchAlbum');
-const searchBtn      = document.getElementById('searchBtn');
-const clearBtn       = document.getElementById('clearBtn');
-const retryBtn       = document.getElementById('retryBtn');
+const searchAlbumEl = document.getElementById('searchAlbum');
+const searchBtn = document.getElementById('searchBtn');
+const clearBtn = document.getElementById('clearBtn');
+const retryBtn = document.getElementById('retryBtn');
 
-const loadingState   = document.getElementById('loadingState');
-const errorState     = document.getElementById('errorState');
-const emptyState     = document.getElementById('emptyState');
+const loadingState = document.getElementById('loadingState');
+const errorState = document.getElementById('errorState');
+const emptyState = document.getElementById('emptyState');
 const resultsWrapper = document.getElementById('resultsWrapper');
-const resultsGrid    = document.getElementById('resultsGrid');
-const statusBar      = document.getElementById('statusBar');
-const statusText     = document.getElementById('statusText');
-const resultCount    = document.getElementById('resultCount');
+const resultsGrid = document.getElementById('resultsGrid');
+const statusBar = document.getElementById('statusBar');
+const statusText = document.getElementById('statusText');
+const resultCount = document.getElementById('resultCount');
 
 /* ── Recently Released DOM refs ───────────────── */
-const recentSection      = document.getElementById('recentSection');
-const recentGrid         = document.getElementById('recentGrid');
-const recentFilterInput  = document.getElementById('recentFilterInput');
-const recentFilterClear  = document.getElementById('recentFilterClear');
-const recentFilterWrap   = document.getElementById('recentFilterWrap');
-const recentCountBar     = document.getElementById('recentCountBar');
-const recentEmptyState   = document.getElementById('recentEmptyState');
-const recentBody         = document.getElementById('recentBody');
-const recentToggleBtn    = document.getElementById('recentToggleBtn');
-const recentChevronIcon  = document.getElementById('recentChevronIcon');
-const recentTeaser       = document.getElementById('recentTeaser');
+const recentSection = document.getElementById('recentSection');
+const recentGrid = document.getElementById('recentGrid');
+const recentFilterInput = document.getElementById('recentFilterInput');
+const recentFilterClear = document.getElementById('recentFilterClear');
+const recentFilterWrap = document.getElementById('recentFilterWrap');
+const recentCountBar = document.getElementById('recentCountBar');
+const recentEmptyState = document.getElementById('recentEmptyState');
+const recentBody = document.getElementById('recentBody');
+const recentToggleBtn = document.getElementById('recentToggleBtn');
+const recentChevronIcon = document.getElementById('recentChevronIcon');
+const recentTeaser = document.getElementById('recentTeaser');
 
 
 /* ── State ─────────────────────────────────────── */
-let allSongs    = [];
+let allSongs = [];
 let recentSongs = []; /* last 20 entries from allSongs */
 
 /* Active tag filters: fields not covered by the main search inputs */
@@ -288,12 +288,12 @@ function filterRecentSongs(q) {
   if (!q) return recentSongs;
   return recentSongs.filter(song => {
     return (
-      normalize(song.title).includes(q)      ||
-      normalize(song.artist).includes(q)     ||
-      normalize(song.album     || '').includes(q) ||
+      normalize(song.title).includes(q) ||
+      normalize(song.artist).includes(q) ||
+      normalize(song.album || '').includes(q) ||
       normalize(song.featuring || '').includes(q) ||
-      normalize(song.genre     || '').includes(q) ||
-      normalize(song.category  || '').includes(q)
+      normalize(song.genre || '').includes(q) ||
+      normalize(song.category || '').includes(q)
     );
   });
 }
@@ -350,12 +350,12 @@ function buildRecentGrid(songs) {
     };
 
     const rows = [
-      { label: 'Artist',    valueHtml: `<span class="detail-value detail-artist">${escHtml(song.artist)}</span>`,                                           raw: song.artist },
-      { label: 'Featuring', valueHtml: featuringChips ? `<span class="detail-value tag-chips-wrap">${featuringChips}</span>` : '',                            raw: song.featuring || '' },
-      { label: 'Category',  valueHtml: `<span class="detail-value detail-category">${chip('category', song.category || '', 'tag-chip--category')}</span>`,   raw: song.category || '' },
-      { label: 'Genre',     valueHtml: `<span class="detail-value">${chip('genre',    song.genre    || '', 'tag-chip--genre')}</span>`,                      raw: song.genre    || '' },
-      { label: 'Album',     valueHtml: `<span class="detail-value">${chip('album',    song.album    || '', 'tag-chip--album')}</span>`,                      raw: song.album    || '' },
-      { label: 'Released',  valueHtml: `<span class="detail-value">${chip('released', song.released || '', 'tag-chip--released')}</span>`,                  raw: song.released || '' },
+      { label: 'Artist', valueHtml: `<span class="detail-value detail-artist">${escHtml(song.artist)}</span>`, raw: song.artist },
+      { label: 'Featuring', valueHtml: featuringChips ? `<span class="detail-value tag-chips-wrap">${featuringChips}</span>` : '', raw: song.featuring || '' },
+      { label: 'Category', valueHtml: `<span class="detail-value detail-category">${chip('category', song.category || '', 'tag-chip--category')}</span>`, raw: song.category || '' },
+      { label: 'Genre', valueHtml: `<span class="detail-value">${chip('genre', song.genre || '', 'tag-chip--genre')}</span>`, raw: song.genre || '' },
+      { label: 'Album', valueHtml: `<span class="detail-value">${chip('album', song.album || '', 'tag-chip--album')}</span>`, raw: song.album || '' },
+      { label: 'Released', valueHtml: `<span class="detail-value">${chip('released', song.released || '', 'tag-chip--released')}</span>`, raw: song.released || '' },
     ]
       .filter(r => r.raw.trim() !== '')
       .map(r => `
@@ -372,7 +372,7 @@ function buildRecentGrid(songs) {
          </audio>`
       : `<p class="no-preview"><i class="bi bi-slash-circle me-1"></i>Preview unavailable</p>`;
 
-    const dlFilename = song.title + ' - ' + song.artist + '.mp3';
+    const dlFilename = song.title + ' - ' + song.artist + ' ft. ' + song.featuring + '.mp3';
     const downloadHTML = hasAudio
       ? `<button
            class="btn-download"
@@ -420,9 +420,9 @@ function buildRecentGrid(songs) {
 /* ── Search / Filter ───────────────────────────── */
 
 function runSearch() {
-  const qTitle  = normalize(searchTitleEl.value);
+  const qTitle = normalize(searchTitleEl.value);
   const qArtist = normalize(searchArtistEl.value);
-  const qAlbum  = normalize(searchAlbumEl.value);
+  const qAlbum = normalize(searchAlbumEl.value);
   const { category: qCategory, genre: qGenre, released: qReleased } = tagFilter;
 
   const hasInput = qTitle || qArtist || qAlbum || qCategory || qGenre || qReleased;
@@ -433,12 +433,12 @@ function runSearch() {
   }
 
   const filtered = allSongs.filter(song => {
-    const titleMatch    = !qTitle    || normalize(song.title).includes(qTitle);
-    const artistMatch   = !qArtist   || normalize(song.artist).includes(qArtist)
-                                     || normalize(song.featuring || '').includes(qArtist);
-    const albumMatch    = !qAlbum    || normalize(song.album    || '').includes(qAlbum);
+    const titleMatch = !qTitle || normalize(song.title).includes(qTitle);
+    const artistMatch = !qArtist || normalize(song.artist).includes(qArtist)
+      || normalize(song.featuring || '').includes(qArtist);
+    const albumMatch = !qAlbum || normalize(song.album || '').includes(qAlbum);
     const categoryMatch = !qCategory || normalize(song.category || '') === qCategory;
-    const genreMatch    = !qGenre    || normalize(song.genre    || '') === qGenre;
+    const genreMatch = !qGenre || normalize(song.genre || '') === qGenre;
     const releasedMatch = !qReleased || normalize(song.released || '') === qReleased;
     return titleMatch && artistMatch && albumMatch && categoryMatch && genreMatch && releasedMatch;
   });
@@ -449,9 +449,9 @@ function runSearch() {
   renderResults(filtered, { qTitle, qArtist, qAlbum, qCategory, qGenre, qReleased });
 
   /* Clear inputs after search so the fields are ready for a new query */
-  searchTitleEl.value  = '';
+  searchTitleEl.value = '';
   searchArtistEl.value = '';
-  searchAlbumEl.value  = '';
+  searchAlbumEl.value = '';
 
   /* Collapse the recently released section to give results more focus */
   collapseRecentSection();
@@ -488,11 +488,11 @@ function clearTagFilter(field) {
     tagFilter[field] = '';
     renderTagBar();
     /* Re-run search (or reset if nothing is left to filter on) */
-    const qTitle  = normalize(searchTitleEl.value);
+    const qTitle = normalize(searchTitleEl.value);
     const qArtist = normalize(searchArtistEl.value);
-    const qAlbum  = normalize(searchAlbumEl.value);
+    const qAlbum = normalize(searchAlbumEl.value);
     const anyLeft = qTitle || qArtist || qAlbum ||
-                    tagFilter.category || tagFilter.genre || tagFilter.released;
+      tagFilter.category || tagFilter.genre || tagFilter.released;
     if (anyLeft) {
       runSearch();
     } else {
@@ -525,9 +525,9 @@ function renderTagBar() {
 
 /* ── Clear ─────────────────────────────────────── */
 function clearSearch() {
-  searchTitleEl.value  = '';
+  searchTitleEl.value = '';
   searchArtistEl.value = '';
-  searchAlbumEl.value  = '';
+  searchAlbumEl.value = '';
   tagFilter = { category: '', genre: '', released: '' };
   renderTagBar();
   showState('idle');
@@ -585,12 +585,12 @@ function renderResults(songs, query = {}) {
     };
 
     const rows = [
-      { label: 'Artist',   valueHtml: `<span class="detail-value detail-artist">${escHtml(song.artist)}</span>`,                         raw: song.artist },
-      { label: 'Featuring',valueHtml: featuringChips ? `<span class="detail-value tag-chips-wrap">${featuringChips}</span>` : '',        raw: song.featuring || '' },
+      { label: 'Artist', valueHtml: `<span class="detail-value detail-artist">${escHtml(song.artist)}</span>`, raw: song.artist },
+      { label: 'Featuring', valueHtml: featuringChips ? `<span class="detail-value tag-chips-wrap">${featuringChips}</span>` : '', raw: song.featuring || '' },
       { label: 'Category', valueHtml: `<span class="detail-value detail-category">${chip('category', song.category || '', 'tag-chip--category')}</span>`, raw: song.category || '' },
-      { label: 'Genre',    valueHtml: `<span class="detail-value">${chip('genre',    song.genre    || '', 'tag-chip--genre')}</span>`,    raw: song.genre    || '' },
-      { label: 'Album',    valueHtml: `<span class="detail-value">${chip('album',    song.album    || '', 'tag-chip--album')}</span>`,    raw: song.album    || '' },
-      { label: 'Released', valueHtml: `<span class="detail-value">${chip('released', song.released || '', 'tag-chip--released')}</span>`,raw: song.released || '' },
+      { label: 'Genre', valueHtml: `<span class="detail-value">${chip('genre', song.genre || '', 'tag-chip--genre')}</span>`, raw: song.genre || '' },
+      { label: 'Album', valueHtml: `<span class="detail-value">${chip('album', song.album || '', 'tag-chip--album')}</span>`, raw: song.album || '' },
+      { label: 'Released', valueHtml: `<span class="detail-value">${chip('released', song.released || '', 'tag-chip--released')}</span>`, raw: song.released || '' },
     ]
       .filter(r => r.raw.trim() !== '')
       .map(r => `
@@ -609,7 +609,7 @@ function renderResults(songs, query = {}) {
       : `<p class="no-preview"><i class="bi bi-slash-circle me-1"></i>Preview unavailable</p>`;
 
     /* ── Download button ── */
-    const dlFilename = song.title + ' - ' + song.artist + '.mp3';
+    const dlFilename = song.title + ' - ' + song.artist + ' ft. ' + song.featuring + '.mp3';
     const downloadHTML = hasAudio
       ? `<button
            class="btn-download"
@@ -655,11 +655,11 @@ function renderResults(songs, query = {}) {
   showState('results');
 
   const labelParts = [];
-  if (query.qTitle)    labelParts.push(`title "${query.qTitle}"`);
-  if (query.qArtist)   labelParts.push(`artist "${query.qArtist}"`);
-  if (query.qAlbum)    labelParts.push(`album "${query.qAlbum}"`);
+  if (query.qTitle) labelParts.push(`title "${query.qTitle}"`);
+  if (query.qArtist) labelParts.push(`artist "${query.qArtist}"`);
+  if (query.qAlbum) labelParts.push(`album "${query.qAlbum}"`);
   if (query.qCategory) labelParts.push(`category "${query.qCategory}"`);
-  if (query.qGenre)    labelParts.push(`genre "${query.qGenre}"`);
+  if (query.qGenre) labelParts.push(`genre "${query.qGenre}"`);
   if (query.qReleased) labelParts.push(`released "${query.qReleased}"`);
 
   setStatus(
