@@ -4,7 +4,7 @@
    search / filter / card-display logic.
    ===================================================== */
 
-const API_URL = 'https://sjr-music-api.onrender.com/music';
+const API_URL = 'https://sjr-music-api-gold.vercel.app/music';
 
 /* CORS proxies — only used as fallback if direct fetch fails */
 const CORS_PROXIES = [
