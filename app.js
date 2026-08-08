@@ -1098,3 +1098,372 @@ async function downloadSong(url, filename, btn) {
     }, 2500);
   }
 }
+
+
+/* =====================================================
+   FAVOURITES MODULE
+   Self-contained; reads/writes localStorage.
+   Injects heart buttons after every card-build cycle.
+   ===================================================== */
+
+(function initFavourites() {
+
+  const LS_KEY = 'sjrmusic_favourites';
+
+  /* ── LocalStorage helpers ────────────────────── */
+
+  /** Returns the saved favourites array (array of song objects). */
+  function loadFavs() {
+    try {
+      return JSON.parse(localStorage.getItem(LS_KEY)) || [];
+    } catch {
+      return [];
+    }
+  }
+
+  /** Persists the favourites array. */
+  function saveFavs(favs) {
+    localStorage.setItem(LS_KEY, JSON.stringify(favs));
+  }
+
+  /**
+   * Derives a stable string key for a song.
+   * Uses title + artist (lowercased, trimmed) — robust enough for this dataset.
+   */
+  function songKey(song) {
+    return `${(song.title || '').trim().toLowerCase()}|${(song.artist || '').trim().toLowerCase()}`;
+  }
+
+  /** Returns true if the song is currently favourited. */
+  function isFav(song) {
+    return loadFavs().some(f => songKey(f) === songKey(song));
+  }
+
+  /** Adds or removes a song from favourites; returns the new state (true = added). */
+  function toggleFav(song) {
+    const favs = loadFavs();
+    const key  = songKey(song);
+    const idx  = favs.findIndex(f => songKey(f) === key);
+    if (idx === -1) {
+      favs.push(song);
+      saveFavs(favs);
+      return true;  /* added */
+    } else {
+      favs.splice(idx, 1);
+      saveFavs(favs);
+      return false; /* removed */
+    }
+  }
+
+  /* ── Count badge on the header button ───────── */
+
+  const favCountEl = document.getElementById('favCount');
+
+  function refreshCountBadge() {
+    const count = loadFavs().length;
+    if (count > 0) {
+      favCountEl.textContent = count > 99 ? '99+' : count;
+      favCountEl.classList.remove('d-none');
+    } else {
+      favCountEl.classList.add('d-none');
+    }
+  }
+
+  /* ── Heart button injection ──────────────────── */
+
+  /**
+   * Injects a heart toggle button into a song card element.
+   * Called after each card is appended to a grid.
+   * @param {HTMLElement} cardEl  The .song-card element
+   * @param {object}      song    The raw song data object
+   */
+  function injectHeart(cardEl, song) {
+    /* Don't double-inject */
+    if (cardEl.querySelector('.btn-fav-heart')) return;
+
+    const btn = document.createElement('button');
+    btn.className  = 'btn-fav-heart';
+    btn.title      = 'Add to favourites';
+    btn.setAttribute('aria-label', 'Toggle favourite');
+    btn.innerHTML  = '<i class="bi bi-heart-fill"></i>';
+
+    /* Reflect current saved state */
+    if (isFav(song)) {
+      btn.classList.add('is-fav');
+      btn.title = 'Remove from favourites';
+    }
+
+    btn.addEventListener('click', e => {
+      e.stopPropagation(); /* don't bubble to card or grids */
+
+      const added = toggleFav(song);
+
+      if (added) {
+        btn.classList.add('is-fav', 'heart-pop');
+        btn.title = 'Remove from favourites';
+        btn.addEventListener('animationend', () => btn.classList.remove('heart-pop'), { once: true });
+      } else {
+        btn.classList.remove('is-fav');
+        btn.title = 'Add to favourites';
+      }
+
+      /* Keep every copy of this song's heart in sync across both grids */
+      syncAllHearts(song, added);
+
+      /* Notify the favourites view and badge to refresh */
+      document.dispatchEvent(new CustomEvent('favchange'));
+    });
+
+    cardEl.appendChild(btn);
+  }
+
+  /**
+   * After toggling, sync the heart state on any duplicate cards for the same
+   * song that may appear in the other grid (e.g., a recent card + a search card).
+   */
+  function syncAllHearts(song, isFavNow) {
+    [resultsGrid, recentGrid].forEach(grid => {
+      grid.querySelectorAll('.btn-fav-heart').forEach(btn => {
+        const card = btn.closest('.song-card');
+        if (!card) return;
+        if (card.dataset.favKey === songKey(song)) {
+          btn.classList.toggle('is-fav', isFavNow);
+          btn.title = isFavNow ? 'Remove from favourites' : 'Add to favourites';
+        }
+      });
+    });
+  }
+
+  /* ── Observe grid mutations to inject hearts ── */
+  /*
+   * We use a MutationObserver on each results grid so that whenever new
+   * .song-card elements are added (by renderResults or buildRecentGrid),
+   * we automatically inject the heart button.  This avoids ANY modification
+   * of the existing card-building functions.
+   */
+
+  function observeGrid(grid, getSong) {
+    const observer = new MutationObserver(mutations => {
+      mutations.forEach(mut => {
+        mut.addedNodes.forEach(node => {
+          if (node.nodeType !== 1) return;
+          const cards = node.classList.contains('song-card')
+            ? [node]
+            : [...node.querySelectorAll('.song-card')];
+          cards.forEach(card => {
+            const song = getSong(card);
+            if (!song) return;
+            /* Store the key on the card so syncAllHearts can match later */
+            card.dataset.favKey = songKey(song);
+            injectHeart(card, song);
+          });
+        });
+      });
+    });
+    observer.observe(grid, { childList: true });
+    return observer;
+  }
+
+  /*
+   * To get the song object for a card we match via the card heading text
+   * against the allSongs / recentSongs arrays.  This is reliable because
+   * the heading is rendered as "Artist – Title" and both values come from the
+   * same raw data.
+   */
+  function findSongForCard(card, pool) {
+    /* Use data-fav-key if already set (happens on re-render) */
+    if (card.dataset.favKey) {
+      return pool.find(s => songKey(s) === card.dataset.favKey) || null;
+    }
+    const heading = card.querySelector('.card-heading');
+    if (!heading) return null;
+    /* Strip icons from the heading text */
+    const text = heading.textContent.trim();
+    return pool.find(s => {
+      const expected = `${s.artist} – ${s.title}`;
+      return text.includes(expected);
+    }) || null;
+  }
+
+  observeGrid(resultsGrid, card => findSongForCard(card, allSongs));
+  observeGrid(recentGrid,  card => findSongForCard(card, recentSongs));
+
+  /* ── Inline favourites view (renders into the main resultsGrid) ── */
+
+  const favouritesBtn = document.getElementById('favouritesBtn');
+
+  /** True while the results area is displaying the favourites view. */
+  let isFavView = false;
+
+  /**
+   * Renders all favourited songs into the main resultsGrid, reusing the
+   * existing resultsWrapper / showState / setStatus infrastructure.
+   */
+  function showFavouritesInline() {
+    isFavView = true;
+    const favs = loadFavs();
+
+    /* Collapse the Recently Released section for focus, same as a search */
+    collapseRecentSection();
+
+    if (favs.length === 0) {
+      showState('empty');
+      /* Swap the empty-state copy to be favourites-specific */
+      document.querySelector('#emptyState h4').textContent    = 'No favourites yet';
+      document.querySelector('#emptyState .text-muted').textContent =
+        'Tap the \u2665 icon on any song card to save it here.';
+      document.querySelector('#emptyState .empty-icon').className =
+        'bi bi-heart empty-icon';
+      /* Status bar with proper heart icon via innerHTML */
+      setStatus('\u2665 Your Favourites');
+      statusText.innerHTML = '<i class="bi bi-heart-fill me-1" style="color:#ef4444;font-size:.9em"></i> Your Favourites';
+      emptyState.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
+
+    /* Reset grid */
+    resultsGrid.innerHTML = '';
+
+    const audioNodes = [];
+
+    favs.forEach((song, idx) => {
+
+      /* ── Art ── */
+      const isImageUrl = src =>
+        src && src.trim() !== '' &&
+        !(src.includes('/video/upload/') && !src.match(/\.(jpg|jpeg|png|webp|gif)$/i));
+
+      const artHTML = isImageUrl(song.songArt)
+        ? `<img
+             src="${escAttr(song.songArt)}"
+             alt="${escAttr(song.title)} cover art"
+             class="card-art"
+             loading="lazy"
+             onerror="this.outerHTML='<div class=card-art-fallback><i class=\\'bi bi-music-note-beamed\\'></i></div>'"
+           />`
+        : `<div class="card-art-fallback"><i class="bi bi-music-note-beamed"></i></div>`;
+
+      /* ── Featuring chips ── */
+      const featuringChips = (song.featuring || '')
+        .split(/,|&|\bfeat\.?\b|\bft\.?\b/i)
+        .map(n => n.trim())
+        .filter(Boolean)
+        .map(name =>
+          `<button class="tag-chip tag-chip--artist" data-field="artist" data-value="${escAttr(name)}" title="Filter by ${escAttr(name)}">${escHtml(name)}</button>`
+        ).join('');
+
+      const chip = (field, value, extraCls = '') => {
+        if (!value || !value.trim()) return escHtml(value);
+        return `<button class="tag-chip ${extraCls}" data-field="${field}" data-value="${escAttr(value)}" title="Filter by ${escAttr(value)}">${escHtml(value)}</button>`;
+      };
+
+      const rows = [
+        { label: 'Artist',    valueHtml: `<span class="detail-value detail-artist">${escHtml(song.artist)}</span>`, raw: song.artist },
+        { label: 'Featuring', valueHtml: featuringChips ? `<span class="detail-value tag-chips-wrap">${featuringChips}</span>` : '', raw: song.featuring || '' },
+        { label: 'Category',  valueHtml: `<span class="detail-value detail-category">${chip('category', song.category || '', 'tag-chip--category')}</span>`, raw: song.category || '' },
+        { label: 'Genre',     valueHtml: `<span class="detail-value">${chip('genre', song.genre || '', 'tag-chip--genre')}</span>`, raw: song.genre || '' },
+        { label: 'Album',     valueHtml: `<span class="detail-value">${chip('album', song.album || '', 'tag-chip--album')}</span>`, raw: song.album || '' },
+        { label: 'Released',  valueHtml: `<span class="detail-value">${chip('released', song.released || '', 'tag-chip--released')}</span>`, raw: song.released || '' },
+      ]
+        .filter(r => r.raw.trim() !== '')
+        .map(r => `
+        <li class="detail-row">
+          <span class="detail-label">${r.label}</span>
+          ${r.valueHtml}
+        </li>`).join('');
+
+      /* ── Audio preview ── */
+      const hasAudio = isValidAudioUrl(song.songUrl);
+      const audioHTML = hasAudio
+        ? `<audio class="card-audio" controls preload="none" data-card-index="fav-${idx}">
+             <source src="${escAttr(song.songUrl)}" type="audio/mpeg" />
+           </audio>`
+        : `<p class="no-preview"><i class="bi bi-slash-circle me-1"></i>Preview unavailable</p>`;
+
+      /* ── Download button ── */
+      const dlFilename = song.title + ' - ' + song.artist +
+        (song.featuring && song.featuring.trim() ? ' ft. ' + song.featuring : '') + '.mp3';
+      const downloadHTML = hasAudio
+        ? `<button
+             class="btn-download"
+             data-url="${escAttr(song.songUrl)}"
+             data-filename="${escAttr(dlFilename)}">
+             <i class="bi bi-download me-2"></i>Download ${escHtml(song.artist)} – ${escHtml(song.title)}
+           </button>`
+        : '';
+
+      const cardEl = document.createElement('div');
+      cardEl.className = 'song-card';
+      cardEl.style.animationDelay = `${Math.min(idx * 0.05, 0.5)}s`;
+      cardEl.dataset.cardIndex = `fav-${idx}`;
+      cardEl.dataset.favKey    = songKey(song);
+      cardEl.innerHTML = `
+        <div class="card-num" data-num="${idx + 1}">${idx + 1}</div>
+        <div class="card-art-wrap">
+          ${artHTML}
+        </div>
+        <div class="card-body">
+          <h2 class="card-heading">
+            <i class="bi bi-download me-2 card-heading-icon"></i>${escHtml(song.artist)} – ${escHtml(song.title)}
+          </h2>
+          <ul class="detail-list">
+            ${rows}
+          </ul>
+          <div class="card-player">
+            ${audioHTML}
+          </div>
+          ${downloadHTML}
+        </div>`;
+
+      resultsGrid.appendChild(cardEl);
+
+      const audioEl = cardEl.querySelector('audio.card-audio');
+      audioNodes.push(audioEl);
+    });
+
+    wireAudioAutoplay(audioNodes);
+    showState('results');
+
+    /* setStatus uses textContent so we set the count normally then
+       override statusText with innerHTML to render the heart icon */
+    setStatus('\u2665 Your Favourites', favs.length);
+    statusText.innerHTML = '<i class="bi bi-heart-fill me-1" style="color:#ef4444;font-size:.9em"></i> Your Favourites';
+
+    /* Scroll smoothly to the results so they are in view, not hidden
+       below the (collapsed) Recently Released section */
+    resultsWrapper.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  /* ── Button click: toggle fav view on/off ── */
+  favouritesBtn.addEventListener('click', () => {
+    if (isFavView) {
+      /* Second click exits the favourites view — same as Clear */
+      isFavView = false;
+      clearSearch();
+    } else {
+      showFavouritesInline();
+    }
+  });
+
+  /* ── When a heart is toggled while in fav view, live-refresh the grid ── */
+  /*
+   * We patch into the heart-toggle handler by listening for the custom
+   * "favchange" event that we dispatch after every toggle (see updated
+   * injectHeart below).  This keeps the inline view in sync without
+   * modifying any existing code paths.
+   */
+  document.addEventListener('favchange', () => {
+    refreshCountBadge();
+    if (isFavView) showFavouritesInline();
+  });
+
+  /* ── Exit fav view whenever a real search or clear fires ── */
+  searchBtn.addEventListener('click',    () => { isFavView = false; }, true);
+  clearBtn.addEventListener('click',     () => { isFavView = false; }, true);
+  retryBtn.addEventListener('click',     () => { isFavView = false; }, true);
+
+  /* ── Initialise badge on page load ─────────── */
+  refreshCountBadge();
+
+})();
+

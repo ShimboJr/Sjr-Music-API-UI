@@ -1219,6 +1219,15 @@ audio.card-audio {
     justify-content: center;
   }
 
+  /* Favourites button moves below Search + Clear on small screens */
+  .btn-search  { order: 1; }
+  .btn-clear   { order: 2; }
+  .btn-favourites {
+    order: 3;
+    width: 100%;
+    justify-content: center;
+  }
+
   .status-bar {
     flex-direction: column;
     align-items: flex-start;
@@ -1352,3 +1361,124 @@ audio.card-audio {
     gap: .35rem;
   }
 }
+
+/* ═══════════════════════════════════════════════
+   FAVOURITES FEATURE
+   ═══════════════════════════════════════════════ */
+
+/* ── Heart icon on song cards ─────────────────── */
+.btn-fav-heart {
+  position: absolute;
+  top: .65rem;
+  left: .65rem;
+  z-index: 4;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1rem;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+  /* Default: transparent/ghosted */
+  background: rgba(0, 0, 0, .45);
+  color: rgba(255, 255, 255, .35);
+  border: 1px solid rgba(255, 255, 255, .1);
+  backdrop-filter: blur(6px);
+  transition: transform .2s cubic-bezier(.34, 1.56, .64, 1),
+              background .25s ease,
+              color .25s ease,
+              box-shadow .25s ease;
+}
+
+.btn-fav-heart:hover {
+  transform: scale(1.18);
+  color: rgba(255, 255, 255, .75);
+  background: rgba(0, 0, 0, .65);
+}
+
+/* Active (favourited) state — red heart */
+.btn-fav-heart.is-fav {
+  background: rgba(239, 68, 68, .18);
+  color: #ef4444;
+  border-color: rgba(239, 68, 68, .5);
+  box-shadow: 0 0 14px rgba(239, 68, 68, .45);
+}
+
+.btn-fav-heart.is-fav:hover {
+  background: rgba(239, 68, 68, .28);
+  box-shadow: 0 0 22px rgba(239, 68, 68, .6);
+}
+
+/* Micro-pop animation when toggling on */
+@keyframes heartPop {
+  0%   { transform: scale(1); }
+  40%  { transform: scale(1.45); }
+  70%  { transform: scale(.88); }
+  100% { transform: scale(1); }
+}
+
+.btn-fav-heart.heart-pop {
+  animation: heartPop .35s cubic-bezier(.34, 1.56, .64, 1) forwards;
+}
+
+/* ── Favourites button (header bar) ──────────── */
+.btn-favourites {
+  position: relative;
+  background: rgba(239, 68, 68, .1);
+  color: #fb7185;
+  border: 1px solid rgba(239, 68, 68, .35);
+  border-radius: var(--radius-md);
+  padding: .65rem 1.6rem;
+  font-weight: 700;
+  font-family: var(--font);
+  font-size: .95rem;
+  letter-spacing: .02em;
+  transition: var(--transition);
+  display: inline-flex;
+  align-items: center;
+  gap: .35rem;
+  cursor: pointer;
+}
+
+.btn-favourites:hover {
+  background: linear-gradient(135deg, #ef4444, #fb7185);
+  color: #fff;
+  border-color: transparent;
+  box-shadow: 0 6px 20px rgba(239, 68, 68, .4);
+  transform: translateY(-1px);
+}
+
+.btn-favourites:active {
+  transform: translateY(0);
+}
+
+/* Bubble count badge on the button */
+.fav-count-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 .4em;
+  border-radius: 999px;
+  background: #ef4444;
+  color: #fff;
+  font-size: .68rem;
+  font-weight: 800;
+  line-height: 1;
+  margin-left: .25rem;
+}
+
+/* ── NEW-badge conflict resolution ─────────────── */
+/* When a card has BOTH .recent-new-badge AND .btn-fav-heart,
+   the NEW badge sits at top-left and the heart must shift right
+   to avoid overlapping. We do this only inside the recentGrid. */
+#recentGrid .song-card .btn-fav-heart {
+  left: auto;
+  right: 2.5rem; /* sits just left of the track number badge */
+}
+
