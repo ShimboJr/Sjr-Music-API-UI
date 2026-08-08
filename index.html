@@ -81,6 +81,9 @@
             <button id="searchBtn" class="btn btn-search">
               <i class="bi bi-search me-2"></i>Search
             </button>
+            <button id="shuffleBtn" class="btn btn-shuffle">
+              <i class="bi bi-shuffle me-2"></i>Shuffle
+            </button>
             <button id="clearBtn" class="btn btn-clear">
               <i class="bi bi-x-circle me-2"></i>Clear
             </button>
@@ -133,10 +136,8 @@
     <section id="recentSection" class="recent-section d-none mb-5">
 
       <!-- Always-visible header (click anywhere to toggle) -->
-      <div class="recent-section-header" id="recentToggleBtn"
-           role="button" tabindex="0"
-           aria-expanded="true" aria-controls="recentBody"
-           title="Toggle Recently Released">
+      <div class="recent-section-header" id="recentToggleBtn" role="button" tabindex="0" aria-expanded="true"
+        aria-controls="recentBody" title="Toggle Recently Released">
 
         <div class="recent-title-group">
           <span class="recent-badge"><i class="bi bi-lightning-charge-fill"></i></span>
@@ -154,15 +155,10 @@
           <!-- Filter input (hidden when collapsed) -->
           <div class="recent-filter-wrap" id="recentFilterWrap">
             <i class="bi bi-search recent-filter-icon"></i>
-            <input
-              type="text"
-              id="recentFilterInput"
-              class="recent-filter-input"
-              placeholder="Filter by title, artist, album…"
-              autocomplete="off"
-              aria-label="Filter recent songs"
-            />
-            <button id="recentFilterClear" class="recent-filter-clear d-none" title="Clear filter" aria-label="Clear recent filter">
+            <input type="text" id="recentFilterInput" class="recent-filter-input"
+              placeholder="Filter by title, artist, album…" autocomplete="off" aria-label="Filter recent songs" />
+            <button id="recentFilterClear" class="recent-filter-clear d-none" title="Clear filter"
+              aria-label="Clear recent filter">
               <i class="bi bi-x"></i>
             </button>
           </div>

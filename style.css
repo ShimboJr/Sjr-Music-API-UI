@@ -226,6 +226,47 @@ body {
   transform: translateY(-1px);
 }
 
+/* ── Shuffle button ──────────────────── */
+.btn-shuffle {
+  background: rgba(20, 184, 166, .12);
+  color: #2dd4bf;
+  border: 1px solid rgba(20, 184, 166, .4);
+  border-radius: var(--radius-md);
+  padding: .65rem 1.6rem;
+  font-weight: 700;
+  font-family: var(--font);
+  font-size: .95rem;
+  letter-spacing: .02em;
+  transition: var(--transition);
+  display: inline-flex;
+  align-items: center;
+  gap: .35rem;
+  cursor: pointer;
+}
+
+.btn-shuffle:hover {
+  background: linear-gradient(135deg, #14b8a6, #2dd4bf);
+  color: #fff;
+  border-color: transparent;
+  box-shadow: 0 6px 20px rgba(20, 184, 166, .4);
+  transform: translateY(-1px);
+}
+
+.btn-shuffle:active {
+  transform: translateY(0);
+}
+
+/* Spin the shuffle icon when active / loading */
+.btn-shuffle.shuffling .bi-shuffle {
+  animation: shuffleSpin .5s cubic-bezier(.4, 0, .2, 1);
+}
+
+@keyframes shuffleSpin {
+  0%   { transform: rotate(0deg)   scale(1);    }
+  40%  { transform: rotate(180deg) scale(1.25); }
+  100% { transform: rotate(360deg) scale(1);    }
+}
+
 /* ── Floating notes decoration ───────── */
 .floating-notes {
   position: absolute;
@@ -1213,17 +1254,26 @@ audio.card-audio {
     width: 100%;
   }
 
-  .btn-search,
   .btn-clear {
     width: 100%;
     justify-content: center;
   }
 
-  /* Favourites button moves below Search + Clear on small screens */
-  .btn-search  { order: 1; }
-  .btn-clear   { order: 2; }
+  /* On small screens: Search is row 1 (full width), Shuffle drops to
+     row 2 (full width), Clear to row 3, Favourites to row 4. */
+  .btn-search {
+    order: 1;
+    width: 100%;
+    justify-content: center;
+  }
+  .btn-shuffle {
+    order: 2;
+    width: 100%;
+    justify-content: center;
+  }
+  .btn-clear      { order: 3; }
   .btn-favourites {
-    order: 3;
+    order: 4;
     width: 100%;
     justify-content: center;
   }

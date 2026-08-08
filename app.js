@@ -1467,3 +1467,83 @@ async function downloadSong(url, filename, btn) {
 
 })();
 
+
+/* =====================================================
+   SHUFFLE MODULE
+   Self-contained IIFE. Reads allSongs (never mutates it).
+   Uses a partial Fisher-Yates shuffle to pick exactly
+   SHUFFLE_COUNT unique songs each click.
+   ===================================================== */
+
+(function initShuffle() {
+
+  const SHUFFLE_COUNT = 50; /* songs to display per shuffle */
+
+  const shuffleBtn = document.getElementById('shuffleBtn');
+
+  /**
+   * Partial Fisher-Yates shuffle.
+   * Operates on a *shallow copy* of the source array so the original
+   * allSongs catalogue is never mutated.
+   *
+   * Time complexity: O(SHUFFLE_COUNT) — only iterates 50 steps regardless
+   * of catalogue size, making it efficient for hundreds or thousands of songs.
+   *
+   * @param {object[]} pool   Source array (not modified)
+   * @param {number}   count  How many unique items to pick
+   * @returns {object[]}      Array of `count` unique randomly-picked items
+   */
+  function pickRandom(pool, count) {
+    /* Work on a copy so we never touch allSongs */
+    const copy = pool.slice();
+    const n    = copy.length;
+    const take = Math.min(count, n); /* guard: can't take more than available */
+
+    for (let i = 0; i < take; i++) {
+      /* Pick a random index from the un-shuffled tail */
+      const j = i + Math.floor(Math.random() * (n - i));
+      /* Swap into position */
+      const tmp  = copy[i];
+      copy[i]    = copy[j];
+      copy[j]    = tmp;
+    }
+
+    /* The first `take` elements are now our random selection */
+    return copy.slice(0, take);
+  }
+
+  function runShuffle() {
+    /* Guard: catalogue must be loaded */
+    if (!allSongs || allSongs.length === 0) {
+      setStatus('Catalogue is still loading — please wait a moment and try again.');
+      return;
+    }
+
+    /* Visual feedback: spin the icon */
+    shuffleBtn.classList.add('shuffling');
+    shuffleBtn.addEventListener('animationend', () => {
+      shuffleBtn.classList.remove('shuffling');
+    }, { once: true });
+
+    /* Pick 50 unique songs */
+    const picked = pickRandom(allSongs, SHUFFLE_COUNT);
+
+    /* Collapse the Recently Released section, just like a real search */
+    collapseRecentSection();
+
+    /* Render via the existing renderResults() function — hearts, download,
+       audio player, tag-chips all wire up automatically for free */
+    renderResults(picked, {});
+
+    /* Override the status bar text that renderResults set */
+    statusText.innerHTML =
+      '<i class="bi bi-shuffle me-1" style="color:#2dd4bf;font-size:.9em"></i> ' +
+      `Shuffle — ${picked.length} random songs from your catalogue`;
+
+    /* Scroll smoothly so the results come into view */
+    resultsWrapper.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  shuffleBtn.addEventListener('click', runShuffle);
+
+})();
