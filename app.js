@@ -1469,81 +1469,236 @@ async function downloadSong(url, filename, btn) {
 
 
 /* =====================================================
-   SHUFFLE MODULE
+   SHUFFLE MODULE  (v2 — split-button with category filter)
    Self-contained IIFE. Reads allSongs (never mutates it).
-   Uses a partial Fisher-Yates shuffle to pick exactly
-   SHUFFLE_COUNT unique songs each click.
+
+   API category values (confirmed from live API inspection):
+     Nigerian Music → song.category === 'Nigeria Music'
+     Foreign Music  → song.category === 'Foreign Music'
+
+   Algorithm: Partial Fisher-Yates — O(SHUFFLE_COUNT) regardless
+   of catalogue size.  No duplicates within one shuffle session.
    ===================================================== */
 
 (function initShuffle() {
 
-  const SHUFFLE_COUNT = 50; /* songs to display per shuffle */
+  const SHUFFLE_COUNT = 50; /* max songs per shuffle */
 
-  const shuffleBtn = document.getElementById('shuffleBtn');
+  /* ── DOM refs ──────────────────────────────── */
+  const shuffleBtn            = document.getElementById('shuffleBtn');
+  const dropdownToggle        = document.getElementById('shuffleDropdownToggle');
+  const dropdownEl            = document.getElementById('shuffleDropdown');
+  const shuffleSplitWrap      = document.getElementById('shuffleSplitWrap');
+  const dropdownItems         = dropdownEl.querySelectorAll('.shuffle-dropdown-item');
+  const chevronIcon           = dropdownToggle.querySelector('.shuffle-chevron-icon');
 
+  /* ── State ─────────────────────────────────── */
+  /* Active mode: 'all' | 'nigerian' | 'foreign' */
+  let activeMode = 'all';
+  let dropdownOpen = false;
+
+  /* ── Fisher-Yates partial shuffle ──────────── */
   /**
-   * Partial Fisher-Yates shuffle.
-   * Operates on a *shallow copy* of the source array so the original
-   * allSongs catalogue is never mutated.
-   *
-   * Time complexity: O(SHUFFLE_COUNT) — only iterates 50 steps regardless
-   * of catalogue size, making it efficient for hundreds or thousands of songs.
-   *
-   * @param {object[]} pool   Source array (not modified)
-   * @param {number}   count  How many unique items to pick
-   * @returns {object[]}      Array of `count` unique randomly-picked items
+   * Returns `count` unique, randomly-ordered items from `pool`.
+   * Never mutates the source array.
+   * @param {object[]} pool   Source array
+   * @param {number}   count  Items to pick
+   * @returns {object[]}
    */
   function pickRandom(pool, count) {
-    /* Work on a copy so we never touch allSongs */
-    const copy = pool.slice();
+    const copy = pool.slice();          /* shallow copy — never touch allSongs */
     const n    = copy.length;
-    const take = Math.min(count, n); /* guard: can't take more than available */
+    const take = Math.min(count, n);    /* graceful: return all if fewer than count */
 
     for (let i = 0; i < take; i++) {
-      /* Pick a random index from the un-shuffled tail */
-      const j = i + Math.floor(Math.random() * (n - i));
-      /* Swap into position */
+      const j    = i + Math.floor(Math.random() * (n - i));
       const tmp  = copy[i];
       copy[i]    = copy[j];
       copy[j]    = tmp;
     }
 
-    /* The first `take` elements are now our random selection */
     return copy.slice(0, take);
   }
 
-  function runShuffle() {
+  /* ── Category pool builder ──────────────────── */
+  /**
+   * Returns the correct subset of allSongs for the given mode.
+   * Uses the exact `category` field values from the live API.
+   *
+   * Confirmed values (2026-08-09 inspection):
+   *   Nigerian → 'Nigeria Music'   (363 songs)
+   *   Foreign  → 'Foreign Music'   (119 songs)
+   *
+   * @param {'all'|'nigerian'|'foreign'} mode
+   * @returns {object[]}
+   */
+  function getPool(mode) {
+    if (mode === 'nigerian') {
+      return allSongs.filter(s =>
+        s.category && s.category.trim() === 'Nigeria Music'
+      );
+    }
+    if (mode === 'foreign') {
+      return allSongs.filter(s =>
+        s.category && s.category.trim() === 'Foreign Music'
+      );
+    }
+    /* 'all' → entire catalogue */
+    return allSongs;
+  }
+
+  /* ── Status message builder ─────────────────── */
+  function buildStatusHtml(mode, count) {
+    if (mode === 'nigerian') {
+      return `<i class="bi bi-shuffle me-1" style="color:#f59e0b;font-size:.9em"></i> ` +
+             `🇳🇬 Nigerian Shuffle — <strong>${count}</strong> random Nigerian song${count !== 1 ? 's' : ''} selected.`;
+    }
+    if (mode === 'foreign') {
+      return `<i class="bi bi-shuffle me-1" style="color:#818cf8;font-size:.9em"></i> ` +
+             `🌎 International Shuffle — <strong>${count}</strong> random foreign song${count !== 1 ? 's' : ''} selected.`;
+    }
+    /* 'all' */
+    return `<i class="bi bi-shuffle me-1" style="color:#2dd4bf;font-size:.9em"></i> ` +
+           `🔀 Shuffle Mix — <strong>${count}</strong> random song${count !== 1 ? 's' : ''} from your catalogue.`;
+  }
+
+  /* ── Core execute-shuffle ───────────────────── */
+  function executeShuffle(mode) {
     /* Guard: catalogue must be loaded */
     if (!allSongs || allSongs.length === 0) {
       setStatus('Catalogue is still loading — please wait a moment and try again.');
       return;
     }
 
-    /* Visual feedback: spin the icon */
+    /* Animate the shuffle icon */
     shuffleBtn.classList.add('shuffling');
     shuffleBtn.addEventListener('animationend', () => {
       shuffleBtn.classList.remove('shuffling');
     }, { once: true });
 
-    /* Pick 50 unique songs */
-    const picked = pickRandom(allSongs, SHUFFLE_COUNT);
+    const pool   = getPool(mode);
+    const picked = pickRandom(pool, SHUFFLE_COUNT);
 
-    /* Collapse the Recently Released section, just like a real search */
+    if (picked.length === 0) {
+      setStatus(`No songs found for the selected category. Try a different shuffle option.`);
+      return;
+    }
+
+    /* Collapse recently-released section for focus */
     collapseRecentSection();
 
-    /* Render via the existing renderResults() function — hearts, download,
-       audio player, tag-chips all wire up automatically for free */
+    /* Render using existing infrastructure — hearts / download / audio all wire up */
     renderResults(picked, {});
 
-    /* Override the status bar text that renderResults set */
-    statusText.innerHTML =
-      '<i class="bi bi-shuffle me-1" style="color:#2dd4bf;font-size:.9em"></i> ' +
-      `Shuffle — ${picked.length} random songs from your catalogue`;
+    /* Override the generic status text with our shuffle-specific message */
+    statusText.innerHTML = buildStatusHtml(mode, picked.length);
 
-    /* Scroll smoothly so the results come into view */
+    /* Scroll results into view */
     resultsWrapper.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
-  shuffleBtn.addEventListener('click', runShuffle);
+  /* ── Active-mode indicator ──────────────────── */
+  function setActiveMode(mode) {
+    activeMode = mode;
+
+    dropdownItems.forEach(item => {
+      const isActive = item.dataset.shuffleMode === mode;
+      item.classList.toggle('shuffle-item-active', isActive);
+      item.setAttribute('aria-checked', isActive ? 'true' : 'false');
+    });
+  }
+
+  /* ── Dropdown open / close ──────────────────── */
+  function openDropdown() {
+    dropdownOpen = true;
+    dropdownEl.classList.add('shuffle-dropdown-open');
+    dropdownToggle.setAttribute('aria-expanded', 'true');
+    chevronIcon.style.transform = 'rotate(180deg)';
+
+    /* Focus first item for keyboard navigation */
+    const first = dropdownEl.querySelector('.shuffle-dropdown-item');
+    if (first) first.focus();
+  }
+
+  function closeDropdown() {
+    dropdownOpen = false;
+    dropdownEl.classList.remove('shuffle-dropdown-open');
+    dropdownToggle.setAttribute('aria-expanded', 'false');
+    chevronIcon.style.transform = '';
+  }
+
+  function toggleDropdown() {
+    if (dropdownOpen) {
+      closeDropdown();
+    } else {
+      openDropdown();
+    }
+  }
+
+  /* ── Event: main shuffle button ─────────────── */
+  shuffleBtn.addEventListener('click', () => {
+    closeDropdown();
+    executeShuffle(activeMode);   /* uses current (or default 'all') mode */
+  });
+
+  /* ── Event: dropdown toggle (▼) ─────────────── */
+  dropdownToggle.addEventListener('click', e => {
+    e.stopPropagation();
+    toggleDropdown();
+  });
+
+  /* ── Event: dropdown items ───────────────────── */
+  dropdownItems.forEach(item => {
+    item.addEventListener('click', e => {
+      e.stopPropagation();
+      const mode = item.dataset.shuffleMode;
+      setActiveMode(mode);
+      closeDropdown();
+      executeShuffle(mode);
+    });
+  });
+
+  /* ── Keyboard: dropdown arrow-key navigation ─── */
+  dropdownEl.addEventListener('keydown', e => {
+    const items = [...dropdownEl.querySelectorAll('.shuffle-dropdown-item')];
+    const cur   = document.activeElement;
+    const idx   = items.indexOf(cur);
+
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      if (idx < items.length - 1) items[idx + 1].focus();
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (idx > 0) items[idx - 1].focus();
+      else { closeDropdown(); dropdownToggle.focus(); }
+    } else if (e.key === 'Escape') {
+      closeDropdown();
+      dropdownToggle.focus();
+    } else if (e.key === 'Tab') {
+      closeDropdown();
+    }
+  });
+
+  /* ── Close on outside click ─────────────────── */
+  document.addEventListener('click', e => {
+    if (dropdownOpen && !shuffleSplitWrap.contains(e.target)) {
+      closeDropdown();
+    }
+  });
+
+  /* ── Close on Escape anywhere ───────────────── */
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && dropdownOpen) {
+      closeDropdown();
+      dropdownToggle.focus();
+    }
+  });
+
+  /* ── Close dropdown when user runs a real search or clears ─ */
+  document.getElementById('searchBtn').addEventListener('click', closeDropdown, true);
+  document.getElementById('clearBtn').addEventListener('click', closeDropdown, true);
+
+  /* ── Initialise active-mode ARIA attributes ─── */
+  setActiveMode('all');
 
 })();

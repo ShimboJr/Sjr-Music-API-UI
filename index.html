@@ -81,9 +81,37 @@
             <button id="searchBtn" class="btn btn-search">
               <i class="bi bi-search me-2"></i>Search
             </button>
-            <button id="shuffleBtn" class="btn btn-shuffle">
-              <i class="bi bi-shuffle me-2"></i>Shuffle
-            </button>
+            <!-- Shuffle split-button -->
+            <div class="shuffle-split-wrap" id="shuffleSplitWrap">
+              <!-- Main action: immediate All-Music shuffle -->
+              <button id="shuffleBtn" class="btn btn-shuffle btn-shuffle-main" type="button"
+                aria-label="Shuffle all music">
+                <i class="bi bi-shuffle me-2"></i>Shuffle
+              </button>
+              <!-- Dropdown toggle -->
+              <button id="shuffleDropdownToggle" class="btn btn-shuffle btn-shuffle-arrow" type="button"
+                aria-haspopup="true" aria-expanded="false" aria-label="Choose shuffle category">
+                <i class="bi bi-chevron-down shuffle-chevron-icon"></i>
+              </button>
+              <!-- Dropdown menu -->
+              <div id="shuffleDropdown" class="shuffle-dropdown" role="menu" aria-label="Shuffle category">
+                <button class="shuffle-dropdown-item shuffle-item-active" data-shuffle-mode="all" role="menuitem">
+                  <span class="shuffle-check-icon"><i class="bi bi-check2"></i></span>
+                  <span class="shuffle-item-emoji">🔀</span>
+                  <span class="shuffle-item-label">All Music</span>
+                </button>
+                <button class="shuffle-dropdown-item" data-shuffle-mode="nigerian" role="menuitem">
+                  <span class="shuffle-check-icon"><i class="bi bi-check2"></i></span>
+                  <span class="shuffle-item-emoji">🇳🇬</span>
+                  <span class="shuffle-item-label">Nigerian Music</span>
+                </button>
+                <button class="shuffle-dropdown-item" data-shuffle-mode="foreign" role="menuitem">
+                  <span class="shuffle-check-icon"><i class="bi bi-check2"></i></span>
+                  <span class="shuffle-item-emoji">🌎</span>
+                  <span class="shuffle-item-label">Foreign Music</span>
+                </button>
+              </div>
+            </div>
             <button id="clearBtn" class="btn btn-clear">
               <i class="bi bi-x-circle me-2"></i>Clear
             </button>
