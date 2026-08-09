@@ -1457,10 +1457,19 @@ async function downloadSong(url, filename, btn) {
     if (isFavView) showFavouritesInline();
   });
 
-  /* ── Exit fav view whenever a real search or clear fires ── */
+  /* ── Exit fav view whenever a real search, clear, or shuffle fires ── */
   searchBtn.addEventListener('click',    () => { isFavView = false; }, true);
   clearBtn.addEventListener('click',     () => { isFavView = false; }, true);
   retryBtn.addEventListener('click',     () => { isFavView = false; }, true);
+
+  /* Shuffle buttons — must reset isFavView so a heart-toggle during shuffled
+     playback does NOT reload the favourites view over the shuffled songs. */
+  document.getElementById('shuffleBtn').addEventListener('click',
+    () => { isFavView = false; }, true);
+  /* Also covers the per-category dropdown items */
+  document.getElementById('shuffleDropdown')
+    .querySelectorAll('.shuffle-dropdown-item')
+    .forEach(item => item.addEventListener('click', () => { isFavView = false; }, true));
 
   /* ── Initialise badge on page load ─────────── */
   refreshCountBadge();
