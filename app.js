@@ -57,9 +57,26 @@ let tagFilter = { category: '', genre: '', released: '' };
  */
 const globalAudioRegistry = new Set();
 
+/* ── Centralised Playback State ─────────────────────────────────────────────
+ * A plain mutable object ("ref" pattern) — NOT a closed-over primitive — so
+ * Media Session action handlers always read the CURRENT values at call time,
+ * never a stale snapshot captured when the handler was first registered.
+ *
+ *  queue  — song data objects for the active playback queue
+ *  nodes  — HTMLAudioElement|null — parallel array to queue[]
+ *           (null means that song has no audio preview URL)
+ *  index  — position of the currently-playing song in queue / nodes
+ */
+const pbState = {
+  queue: [],
+  nodes: [],
+  index: -1,
+};
+
 
 /* ── Initialise ─────────────────────────────────── */
 window.addEventListener('DOMContentLoaded', () => {
+  initMediaSession(); /* register Media Session handlers before first play */
   fetchCatalogue();
 
   searchBtn.addEventListener('click', runSearch);
@@ -414,7 +431,7 @@ function buildRecentGrid(songs) {
     audioNodes.push(audioEl);
   });
 
-  wireAudioAutoplay(audioNodes);
+  wireAudioAutoplay(audioNodes, songs);
 }
 
 /* ── Search / Filter ───────────────────────────── */
@@ -650,7 +667,7 @@ function renderResults(songs, query = {}) {
   });
 
   /* ── Wire autoplay + single-playback enforcement ── */
-  wireAudioAutoplay(audioNodes);
+  wireAudioAutoplay(audioNodes, songs);
 
   showState('results');
 
@@ -707,7 +724,7 @@ let activeCrossfadePair = null;
  * @param {(HTMLAudioElement|null)[]} audioNodes  Ordered array for one section
  *        (null entries for songs without a preview URL)
  */
-function wireAudioAutoplay(audioNodes) {
+function wireAudioAutoplay(audioNodes, songs = []) {
 
   /* Prune any nodes that are no longer attached to the document */
   for (const node of globalAudioRegistry) {
@@ -812,6 +829,20 @@ function wireAudioAutoplay(audioNodes) {
 
       setNowPlaying(cardIndex);
 
+      /* ── Sync central playback state so Media Session / Bluetooth always
+         know which queue and position are current.
+         Setting these inside the 'play' event means crossfade auto-advances
+         also keep pbState in sync automatically — the crossfade engine calls
+         nextAudio.play(), which fires this same handler with the correct idx,
+         so no extra synchronisation code is needed anywhere else. ── */
+      pbState.queue = songs;
+      pbState.nodes = audioNodes;
+      pbState.index = idx;
+      updateMediaSessionMeta(songs[idx]);
+      if ('mediaSession' in navigator) {
+        navigator.mediaSession.playbackState = 'playing';
+      }
+
       /* Fresh-play resets */
       crossfadeTriggered = false;
       preloadScheduled = false;
@@ -834,6 +865,9 @@ function wireAudioAutoplay(audioNodes) {
        by the browser when it reaches the end of the file.
     ──────────────────────────────────────────────── */
     audio.addEventListener('pause', () => {
+      if ('mediaSession' in navigator) {
+        navigator.mediaSession.playbackState = 'paused';
+      }
       /* Capture the pair reference immediately — it may be cleared by 'ended'
          before the setTimeout callback runs. */
       const pairAtPause = activeCrossfadePair;
@@ -912,20 +946,11 @@ function wireAudioAutoplay(audioNodes) {
 
       if (crossfadeTriggered) return; /* crossfade handled the transition */
 
-      /* Fallback: advance normally */
-      for (let n = idx + 1; n < audioNodes.length; n++) {
-        const next = audioNodes[n];
-        if (!next) continue;
-
-        scrollToCard(next);
-        setNowPlaying(next.dataset.cardIndex); /* set highlight BEFORE play fires */
-        next.volume = 1;
-        next.load();
-        next.play().catch(err => console.warn('[Fallback] Autoplay blocked:', err));
-        return;
-      }
-
-      setNowPlaying(null);
+      /* Fallback: delegate to the central playback engine.
+         This is the key unification point — "song ends naturally" and
+         "user taps Android/Bluetooth Next" both call the same playNextSong(),
+         so there is only one navigation system for both paths. */
+      playNextSong();
     });
   });
 }
@@ -972,6 +997,219 @@ function scheduleNextPreload(currentAudio, idx, audioNodes, onScheduled) {
 
   /* Otherwise wait for the 'canplaythrough' event */
   currentAudio.addEventListener('canplaythrough', startPreload, { once: true });
+}
+
+/* =====================================================
+   MEDIA SESSION & PLAYBACK ENGINE
+
+   Single source of truth for Previous / Next navigation.
+   Used by: Media Session API (Android notification, lock screen,
+   Chrome mini-player), Bluetooth / headset controls,
+   and the audio.ended fallback (natural song completion).
+
+   Architecture:
+
+                    playPreviousSong()     playNextSong()
+                           ^                    ^
+            _______________| ___________________|
+           |                |         |         |
+     Website Prev    MS prev  Website Next  MS next
+     (future)         track   (future)      track
+                        |                    |
+                   Android /           Android /
+                   Bluetooth           Bluetooth
+   ===================================================== */
+
+/**
+ * Updates the OS / browser media notification card with title, artist,
+ * album, and artwork for the currently-playing song.
+ * Safe to call on browsers that do not support the Media Session API.
+ *
+ * @param {object|null|undefined} song  Raw song object from the API
+ */
+function updateMediaSessionMeta(song) {
+  if (!('mediaSession' in navigator) || !song) return;
+
+  navigator.mediaSession.metadata = new MediaMetadata({
+    title:   song.title  || 'Unknown Title',
+    artist:  song.artist || 'Unknown Artist',
+    album:   song.album  || '',
+    artwork: (song.songArt && song.songArt.trim())
+      ? [{ src: song.songArt, sizes: '512x512', type: 'image/jpeg' }]
+      : [],
+  });
+}
+
+/**
+ * Core navigation primitive used by playNextSong() and playPreviousSong().
+ *
+ * Cancels any active crossfade, pauses every other audio element, then
+ * plays the node at `idx` in pbState.  Media Session metadata is refreshed
+ * automatically via the 'play' event that fires on the audio element inside
+ * wireAudioAutoplay — no duplication needed here.
+ *
+ * @param {number} idx  Target index in pbState.nodes / pbState.queue
+ */
+function playSongByIndex(idx) {
+  if (idx < 0 || idx >= pbState.nodes.length) return;
+
+  const audio = pbState.nodes[idx];
+
+  if (!audio) {
+    /* This slot has no audio preview — skip forward to the next song */
+    playSongByIndex(idx + 1);
+    return;
+  }
+
+  /* Reset crossfade sentinel so the global enforcer works normally */
+  activeCrossfadePair = null;
+
+  /* Pause everything else in the global registry */
+  for (const node of globalAudioRegistry) {
+    if (node !== audio && !node.paused) node.pause();
+  }
+
+  /* Update index first so pbState is already correct when the synchronous
+     'play' event fires (behaviour varies across browser engines) */
+  pbState.index     = idx;
+  audio.volume      = 1;
+  /* Initialise loading for preload="none" elements that haven't started yet */
+  if (audio.readyState < HTMLMediaElement.HAVE_METADATA) audio.load();
+  audio.currentTime = 0;
+  audio.play().catch(err => console.warn('[Engine] play blocked:', err));
+
+  /* Scroll the song card into view */
+  const ci   = audio.dataset.cardIndex;
+  const grid = String(ci).startsWith('recent-') ? recentGrid : resultsGrid;
+  const card = grid.querySelector(`.song-card[data-card-index="${ci}"]`);
+  if (card) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+/**
+ * Navigates to the next playable song in the current pbState queue.
+ *
+ * Behaviour:
+ *  - Searches forward from the current index.
+ *  - Skips null entries (songs without an audio preview URL).
+ *  - Wraps from the last song back to the first so playback never stalls.
+ *
+ * Used by: Media Session nexttrack, Bluetooth/headset next button,
+ *          audio.ended fallback (natural song completion).
+ */
+function playNextSong() {
+  if (pbState.nodes.length === 0) return;
+
+  /* Scan forward from current position */
+  for (let n = pbState.index + 1; n < pbState.nodes.length; n++) {
+    if (pbState.nodes[n]) { playSongByIndex(n); return; }
+  }
+
+  /* Reached the end of the queue — wrap to the first playable song */
+  for (let n = 0; n <= pbState.index; n++) {
+    if (pbState.nodes[n]) { playSongByIndex(n); return; }
+  }
+}
+
+/**
+ * Navigates to the previous song in the current pbState queue.
+ *
+ * Behaviour (matches Spotify / Apple Music standard):
+ *  - If the current song has played for MORE than 3 seconds → restart it.
+ *  - Otherwise → navigate to the previous playable song.
+ *  - If already at the first song → restart it.
+ *
+ * Used by: Media Session previoustrack, Bluetooth/headset previous button.
+ */
+function playPreviousSong() {
+  if (pbState.nodes.length === 0) return;
+
+  const current = pbState.nodes[pbState.index];
+
+  /* Standard '>3 s played → restart' behaviour (Spotify / Apple Music) */
+  if (current && current.currentTime > 3) {
+    current.currentTime = 0;
+    if (current.paused) {
+      current.play().catch(err => console.warn('[Prev] play blocked:', err));
+    }
+    return;
+  }
+
+  /* Scan backward for the previous playable song */
+  for (let n = pbState.index - 1; n >= 0; n--) {
+    if (pbState.nodes[n]) { playSongByIndex(n); return; }
+  }
+
+  /* Already at the first song — restart it */
+  if (current) {
+    current.currentTime = 0;
+    if (current.paused) {
+      current.play().catch(err => console.warn('[Prev] play blocked:', err));
+    }
+  }
+}
+
+/**
+ * Registers all Media Session action handlers once on page load.
+ *
+ * Design:
+ *  - Handlers close over pbState (a mutable OBJECT, not primitives) so they
+ *    always operate on the current queue — no stale closures possible.
+ *  - Re-registration is NOT needed when the queue changes; pbState is mutated
+ *    in place by the wireAudioAutoplay 'play' event handler.
+ *  - Uses progressive enhancement: no-op on browsers without Media Session.
+ *  - 'seekto' is wrapped in try/catch — not all platforms expose it.
+ *
+ * Covers:
+ *   Android notification drawer  →  previoustrack / nexttrack
+ *   Android lock screen          →  previoustrack / nexttrack
+ *   Chrome mini-player bar       →  previoustrack / nexttrack
+ *   Bluetooth / headset buttons  →  previoustrack / nexttrack
+ *   Other OS media controls      →  previoustrack / nexttrack
+ */
+function initMediaSession() {
+  if (!('mediaSession' in navigator)) return;
+
+  /* play — resume the currently active audio element */
+  navigator.mediaSession.setActionHandler('play', () => {
+    const audio = pbState.nodes[pbState.index];
+    if (audio) audio.play().catch(() => {});
+  });
+
+  /* pause — pause the currently active audio element */
+  navigator.mediaSession.setActionHandler('pause', () => {
+    const audio = pbState.nodes[pbState.index];
+    if (audio && !audio.paused) audio.pause();
+  });
+
+  /* stop — pause and rewind to the start of the current song */
+  navigator.mediaSession.setActionHandler('stop', () => {
+    const audio = pbState.nodes[pbState.index];
+    if (audio) { audio.pause(); audio.currentTime = 0; }
+  });
+
+  /* previoustrack — single source of truth, shared with any future UI button */
+  navigator.mediaSession.setActionHandler('previoustrack', () => {
+    playPreviousSong();
+  });
+
+  /* nexttrack — single source of truth, shared with any future UI button
+     and with the audio.ended fallback */
+  navigator.mediaSession.setActionHandler('nexttrack', () => {
+    playNextSong();
+  });
+
+  /* seekto — enables progress-bar scrubbing in Android / Chrome controls.
+     Wrapped in try/catch because not all browsers / OS versions expose it. */
+  try {
+    navigator.mediaSession.setActionHandler('seekto', details => {
+      const audio = pbState.nodes[pbState.index];
+      if (audio && details.seekTime != null) {
+        audio.currentTime = details.seekTime;
+      }
+    });
+  } catch {
+    /* seekto not supported on this browser / OS version — silently skip */
+  }
 }
 
 /* ── UI state manager ───────────────────────────── */
@@ -1432,7 +1670,7 @@ async function downloadSong(url, filename, btn) {
       audioNodes.push(audioEl);
     });
 
-    wireAudioAutoplay(audioNodes);
+    wireAudioAutoplay(audioNodes, favs);
     showState('results');
 
     /* setStatus uses textContent so we set the count normally then
