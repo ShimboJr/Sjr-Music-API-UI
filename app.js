@@ -834,9 +834,19 @@ function wireAudioAutoplay(audioNodes) {
        by the browser when it reaches the end of the file.
     ──────────────────────────────────────────────── */
     audio.addEventListener('pause', () => {
+      /* Capture the pair reference immediately — it may be cleared by 'ended'
+         before the setTimeout callback runs. */
+      const pairAtPause = activeCrossfadePair;
       setTimeout(() => {
         /* Don't steal the highlight from the incoming track mid-crossfade */
-        if (activeCrossfadePair && activeCrossfadePair.from === audio) return;
+        if (pairAtPause && pairAtPause.from === audio) return;
+
+        /* Don't clear if another track is already playing (e.g. next song
+           started playing before this pause event resolved) */
+        for (const other of globalAudioRegistry) {
+          if (other !== audio && !other.paused) return;
+        }
+
         if (audio.ended || audio.paused) setNowPlaying(null);
       }, 50);
     });
@@ -908,6 +918,7 @@ function wireAudioAutoplay(audioNodes) {
         if (!next) continue;
 
         scrollToCard(next);
+        setNowPlaying(next.dataset.cardIndex); /* set highlight BEFORE play fires */
         next.volume = 1;
         next.load();
         next.play().catch(err => console.warn('[Fallback] Autoplay blocked:', err));
