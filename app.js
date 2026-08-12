@@ -1981,3 +1981,585 @@ async function downloadSong(url, filename, btn) {
   setActiveMode('all');
 
 })();
+
+
+/* =====================================================
+   PLAY TRACKER MODULE  (v1)
+
+   Tracks actual, seek-proof accumulated listening time for
+   each song.  Sends POST /music/:id/play once the user has
+   genuinely heard ≥ 80 % of a song's duration.
+
+   Design contract
+   ───────────────
+   • Zero modifications to any existing function.
+   • Hooks in by wrapping wireAudioAutoplay() after it is
+     defined — the wrapper is transparent to all callers.
+   • Uses performance.now() wall-clock deltas (NOT currentTime
+     deltas) so seeking forward NEVER credits skipped time.
+   • sessionId  — stable for the full page lifetime.
+   • eventId    — fresh UUID per song play session.
+   • playCountRegistered set BEFORE the async fetch() call
+     to prevent duplicate POSTs from rapid timeupdate ticks.
+   • On network error: playback is unaffected; no manual
+     increment is done; flag stays true for this session.
+   • Backend playCount is authoritative — never increment locally.
+   ===================================================== */
+
+(function initPlayTracker() {
+
+  /* ── Session identity ──────────────────────────────────────────────────── */
+
+  /**
+   * Stable identifier that groups all play events from this page load.
+   * Never reset — survives song changes, pause/resume, and shuffle.
+   */
+  const sessionId = crypto.randomUUID();
+
+  /* ── Tracker state ─────────────────────────────────────────────────────── */
+
+  /**
+   * Single mutable tracker object.  Reset on every new song play session
+   * (different song, OR same song restarted from position 0).
+   *
+   * songId                   – resolved API id of the tracked song
+   * songObj                  – live song data object (mutated on playCount update)
+   * accumulatedListeningTime – seconds of genuine, seek-proof listening
+   * playCountRegistered      – true once POST has been dispatched (deduplication)
+   * eventId                  – UUID per play session (backend deduplication)
+   * lastTickTime             – performance.now() stamp of the last timeupdate
+   *                            tick; null when paused / after seeking / not started
+   * playCountEl              – cached .detail-play-count DOM node for this card
+   */
+  let tracker = {
+    songId: null,
+    songObj: null,
+    accumulatedListeningTime: 0,
+    playCountRegistered: false,
+    eventId: null,
+    lastTickTime: null,
+    playCountEl: null,
+  };
+
+  /* ── Constants ─────────────────────────────────────────────────────────── */
+
+  /**
+   * timeupdate fires ~4 × per second.  A gap > 2 s almost certainly means
+   * the tab was backgrounded or JS execution was throttled.  Cap the delta
+   * to prevent phantom listening time from inflating accumulatedListeningTime.
+   */
+  const MAX_TICK_DELTA_S = 2;
+
+  /* ── ID helper ─────────────────────────────────────────────────────────── */
+
+  /**
+   * Resolves the song's unique API identifier.
+   * Tries song.id first, falls back to song._id (MongoDB convention).
+   * Returns null if neither exists.
+   *
+   * @param {object} song  Raw song object from the API
+   * @returns {string|number|null}
+   */
+  function getSongId(song) {
+    if (song == null) return null;
+    if (song.id != null) return song.id;
+    if (song._id != null) return song._id;
+    return null;
+  }
+
+  /* ── Grid helper ───────────────────────────────────────────────────────── */
+
+  /**
+   * Returns the grid element that owns a card identified by cardIndex.
+   * Mirrors the private ownerGrid() inside wireAudioAutoplay.
+   *   recent-N  → recentGrid
+   *   fav-N     → resultsGrid (favourites view renders into resultsGrid)
+   *   N         → resultsGrid
+   *
+   * @param {string} cardIndex  Value of audio.dataset.cardIndex
+   * @returns {HTMLElement}
+   */
+  function ownerGrid(cardIndex) {
+    return String(cardIndex).startsWith('recent-') ? recentGrid : resultsGrid;
+  }
+
+  /* ── Tracker reset ─────────────────────────────────────────────────────── */
+
+  /**
+   * Resets the tracker for a brand-new song play session.
+   * Called when a different song starts, OR when the same song
+   * restarts from the beginning (currentTime ≈ 0).
+   *
+   * @param {object}           song   Song data object from the API
+   * @param {HTMLAudioElement} audio  The <audio> element that just started
+   */
+  function resetTracker(song, audio) {
+    tracker.songId = getSongId(song);
+    tracker.songObj = song;
+    tracker.accumulatedListeningTime = 0;
+    tracker.playCountRegistered = false;
+    tracker.eventId = crypto.randomUUID();
+    tracker.lastTickTime = null; /* initialised on first timeupdate tick */
+
+    /* Cache the play-count DOM element for this card (direct DOM lookup,
+       not a live HTMLCollection, so it's safe across re-renders of OTHER cards) */
+    const ci = audio.dataset.cardIndex;
+    const grid = ownerGrid(ci);
+    const card = grid.querySelector(`.song-card[data-card-index="${ci}"]`);
+    tracker.playCountEl = card ? card.querySelector('.detail-play-count') : null;
+
+    console.debug(
+      `[PlayTracker] ▶ New session — "${song.title}" (id: ${tracker.songId})`,
+      `eventId: ${tracker.eventId}`
+    );
+  }
+
+  /* ── Network: POST /music/:id/play ────────────────────────────────────── */
+
+  /**
+   * Posts a qualified play event to the backend.
+   * Fully error-isolated — NEVER throws, NEVER stops playback,
+   * NEVER manually increments the count.
+   *
+   * On success: backend returns the authoritative global playCount,
+   * which is written into the live song object and every visible DOM element.
+   *
+   * On failure: a console warning is emitted; no UI change is made.
+   *             playCountRegistered stays true so this session does not retry.
+   *             (Future extension: queue payload for offline/retry support.)
+   *
+   * @param {string|number} songId
+   * @param {{ eventId: string, sessionId: string,
+   *           listenedSeconds: number, duration: number }} payload
+   */
+  async function registerPlayCount(songId, payload) {
+    console.info(
+      `[PlayTracker] ↑ POST /music/${songId}/play`,
+      `— listened ${payload.listenedSeconds.toFixed(1)} s`,
+      `/ ${payload.duration.toFixed(1)} s total`
+    );
+
+    try {
+      const res = await fetch(`${API_URL}/${songId}/play`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+      const data = await res.json();
+
+      if (data && data.success === true && data.counted === true) {
+        console.info(
+          `[PlayTracker] ✓ Counted — songId: ${data.songId},`,
+          `global playCount: ${data.playCount}`
+        );
+
+        /* Update live song object so future re-renders use the correct value */
+        if (
+          tracker.songObj &&
+          String(getSongId(tracker.songObj)) === String(data.songId)
+        ) {
+          tracker.songObj.playCount = data.playCount;
+        }
+
+        /* Propagate into allSongs + recentSongs in-place */
+        updateSongInCatalogues(data.songId, data.playCount);
+
+        /* Refresh every visible play-count element for this song */
+        updatePlayCountUI(data.songId, data.playCount);
+
+      } else {
+        /* Backend acknowledged but did NOT count (e.g. duplicate eventId) */
+        console.info(
+          '[PlayTracker] Response received but not counted:',
+          JSON.stringify(data)
+        );
+      }
+
+    } catch (err) {
+      /*
+       * Network error, non-OK status, or JSON parse failure.
+       * Playback must not be affected.  Do NOT flip playCountRegistered
+       * back to false — this session will not retry, preventing a flood
+       * of duplicate requests if the network is flaky.
+       */
+      console.warn('[PlayTracker] POST failed — playback unaffected:', err);
+    }
+  }
+
+  /* ── Catalogue update ──────────────────────────────────────────────────── */
+
+  /**
+   * Updates the playCount field on every matching song object in
+   * allSongs and recentSongs so any subsequent re-render reflects
+   * the backend-authoritative value without a page reload.
+   *
+   * ALSO patches the localStorage favourites snapshot so that:
+   *   • Cards rendered after the play (e.g. opening Favourites view after
+   *     listening) show the current count immediately.
+   *   • Page refreshes load the correct count from localStorage.
+   *
+   * @param {string|number} songId
+   * @param {number}        playCount
+   */
+  function updateSongInCatalogues(songId, playCount) {
+    const id = String(songId);
+    for (const song of allSongs) {
+      if (String(getSongId(song)) === id) song.playCount = playCount;
+    }
+    for (const song of recentSongs) {
+      if (String(getSongId(song)) === id) song.playCount = playCount;
+    }
+    /* Patch localStorage so Favourites view renders fresh counts */
+    syncFavouritesStoragePlayCount(id, playCount);
+  }
+
+  /**
+   * Reads the favourites array from localStorage, updates the playCount on any
+   * entry whose id matches, and writes it back.
+   * Silently no-ops if localStorage is unavailable or the JSON is corrupt.
+   *
+   * @param {string} songId    String-coerced song id
+   * @param {number} playCount New authoritative count from the backend
+   */
+  function syncFavouritesStoragePlayCount(songId, playCount) {
+    const LS_KEY = 'sjrmusic_favourites';
+    try {
+      const raw  = localStorage.getItem(LS_KEY);
+      if (!raw) return;
+      const favs = JSON.parse(raw);
+      if (!Array.isArray(favs)) return;
+
+      let changed = false;
+      for (const fav of favs) {
+        if (String(getSongId(fav)) === songId) {
+          fav.playCount = playCount;
+          changed = true;
+        }
+      }
+
+      if (changed) {
+        localStorage.setItem(LS_KEY, JSON.stringify(favs));
+        console.debug(
+          `[PlayTracker] localStorage favourites updated — songId: ${songId},`,
+          `playCount: ${playCount}`
+        );
+      }
+    } catch (err) {
+      /* localStorage may be unavailable (private mode quota, etc.) — ignore */
+      console.debug('[PlayTracker] Could not update localStorage favourites:', err);
+    }
+  }
+
+  /* ── DOM update ────────────────────────────────────────────────────────── */
+
+  /**
+   * Updates every visible .detail-play-count element for the given song.
+   *
+   * Two passes:
+   *  1. tracker.playCountEl — the cached element for the currently-playing
+   *     card (instant, always accurate even before data-song-id is stamped).
+   *  2. data-song-id scan across both grids — catches duplicate cards that
+   *     may appear simultaneously in the Recent and Search/Shuffle grids.
+   *
+   * @param {string|number} songId
+   * @param {number}        playCount
+   */
+  function updatePlayCountUI(songId, playCount) {
+    const html = `<i class="bi bi-play-circle-fill me-1"></i>${Number(playCount).toLocaleString()}`;
+    const id = String(songId);
+
+    /* Pass 1 — cached element for the playing card */
+    if (tracker.playCountEl) {
+      tracker.playCountEl.innerHTML = html;
+    }
+
+    /* Pass 2 — any other visible cards stamped with data-song-id */
+    [resultsGrid, recentGrid].forEach(grid => {
+      grid
+        .querySelectorAll(`.song-card[data-song-id="${CSS.escape(id)}"] .detail-play-count`)
+        .forEach(el => { el.innerHTML = html; });
+    });
+  }
+
+  /* ── Per-node listener attachment ─────────────────────────────────────── */
+
+  /**
+   * Attaches four event listeners to each audio node in a batch.
+   * Called immediately after wireAudioAutoplay has attached its own
+   * listeners — the order doesn't matter because each module only reads
+   * from / writes to its own state.
+   *
+   * @param {(HTMLAudioElement|null)[]} audioNodes  Parallel to songs[]
+   * @param {object[]}                  songs       Raw song data objects
+   */
+  function attachTrackerListeners(audioNodes, songs) {
+    audioNodes.forEach((audio, idx) => {
+      if (!audio) return;
+
+      const song = songs[idx];
+      if (!song) return;
+
+      const songId = getSongId(song);
+
+      /* Stamp data-song-id on the <audio> element so the MutationObserver
+         below can propagate it to the parent .song-card */
+      if (songId != null) audio.dataset.songId = String(songId);
+
+      /* ── play ──────────────────────────────────────────────────────────
+         Fires on EVERY audio.play() call — fresh starts AND resumes.
+
+         Reset the tracker only when:
+           (a) a DIFFERENT song is now playing   (tracker.songId changed), OR
+           (b) the SAME song is restarting       (currentTime ≈ 0, as set by
+               playSongByIndex before calling audio.play())
+
+         This preserves accumulatedListeningTime across pause → resume cycles
+         for the same song, while giving each new listening session a clean slate.
+      ────────────────────────────────────────────────────────────────── */
+      audio.addEventListener('play', () => {
+        const resolvedId = getSongId(song);
+        const isDifferentSong = String(tracker.songId) !== String(resolvedId);
+        /* playSongByIndex() sets currentTime = 0 synchronously before play(),
+           so currentTime < 1 reliably identifies a deliberate restart.      */
+        const isFreshStart = audio.currentTime < 1;
+
+        if (isDifferentSong || isFreshStart) {
+          resetTracker(song, audio);
+        }
+        /*
+         * Resume path (same song, currentTime > 1):
+         *   tracker state is fully preserved.
+         *   lastTickTime remains null — the NEXT timeupdate tick will
+         *   initialise it without crediting the pause gap as listening time.
+         */
+      });
+
+      /* ── pause ─────────────────────────────────────────────────────────
+         Stop the accumulation clock.  Zeroing lastTickTime means the gap
+         between pause and the next resume is never credited.
+      ────────────────────────────────────────────────────────────────── */
+      audio.addEventListener('pause', () => {
+        if (String(tracker.songId) !== String(getSongId(song))) return;
+        tracker.lastTickTime = null;
+      });
+
+      /* ── seeked ────────────────────────────────────────────────────────
+         User finished a seek (fired after currentTime has jumped).
+         Zero lastTickTime so:
+           • the duration of the drag is not credited, AND
+           • any latent gap between the old position and the new one
+             (which could be huge on a forward seek) is not credited.
+         The NEXT timeupdate tick will safely re-initialise the clock
+         from the new playback position.
+      ────────────────────────────────────────────────────────────────── */
+      audio.addEventListener('seeked', () => {
+        if (String(tracker.songId) !== String(getSongId(song))) return;
+        tracker.lastTickTime = null;
+        console.debug(
+          `[PlayTracker] ⇢ Seeked — accumulated so far:`,
+          `${tracker.accumulatedListeningTime.toFixed(2)} s`
+        );
+      });
+
+      /* ── timeupdate ────────────────────────────────────────────────────
+         The accumulation heartbeat.  Fires ~4 × per second during playback.
+
+         Algorithm:
+           1. Guard: skip if this is not the currently tracked song.
+           2. Guard: skip if the audio is paused (can fire briefly after seek
+              while still paused in some browsers).
+           3. If lastTickTime is null (first tick after play/resume/seeked),
+              initialise it without crediting any delta — this absorbs the
+              unknown pause gap cleanly.
+           4. Compute wall-clock delta via performance.now().
+              Cap at MAX_TICK_DELTA_S (2 s) to guard against backgrounded tabs
+              or browser JS throttling inflating the count.
+           5. Add delta to accumulatedListeningTime.
+           6. Check the 60 % threshold.  If met and not yet registered:
+                a. Set playCountRegistered = true BEFORE the async fetch().
+                   This prevents a second tick (< 1 ms later) from also
+                   passing the threshold and firing a duplicate request.
+                b. Call registerPlayCount() with the full payload.
+      ────────────────────────────────────────────────────────────────── */
+      audio.addEventListener('timeupdate', () => {
+        /* Guard 1 — only track the active song */
+        if (String(tracker.songId) !== String(getSongId(song))) return;
+        /* Guard 2 — don't accumulate while paused */
+        if (audio.paused) return;
+
+        const now = performance.now();
+
+        if (tracker.lastTickTime === null) {
+          /* First tick: initialise clock, credit nothing */
+          tracker.lastTickTime = now;
+          return;
+        }
+
+        /* Wall-clock delta in seconds, capped */
+        const delta = Math.min(
+          (now - tracker.lastTickTime) / 1000,
+          MAX_TICK_DELTA_S
+        );
+        tracker.lastTickTime = now;
+
+        if (delta > 0) {
+          tracker.accumulatedListeningTime += delta;
+        }
+
+        /* ── 60 % threshold check ──────────────────────────────────── */
+        if (
+          !tracker.playCountRegistered &&
+          isFinite(audio.duration) &&
+          audio.duration > 0 &&
+          tracker.accumulatedListeningTime >= audio.duration * 0.80
+        ) {
+          /* Lock BEFORE async call — prevents race with next tick */
+          tracker.playCountRegistered = true;
+
+          registerPlayCount(getSongId(song), {
+            eventId: tracker.eventId,
+            sessionId: sessionId,
+            listenedSeconds: parseFloat(tracker.accumulatedListeningTime.toFixed(3)),
+            duration: parseFloat(audio.duration.toFixed(3)),
+          });
+        }
+      });
+
+    }); /* end audioNodes.forEach */
+  }
+
+  /* ── data-song-id stamping via MutationObserver ───────────────────────── */
+
+  /*
+   * Two responsibilities:
+   *
+   *  1. STAMP data-song-id on every newly-added .song-card so that
+   *     updatePlayCountUI() can find duplicate cards across both grids.
+   *
+   *  2. AUTO-CORRECT the displayed play count using the live allSongs data.
+   *     This covers the critical case where Favourites (or any other view) is
+   *     opened AFTER a play has already been registered — the card is rendered
+   *     from a localStorage snapshot that may be stale, but the MutationObserver
+   *     fires after wireAudioAutoplay runs (microtask queue), so allSongs already
+   *     holds the authoritative count.  The correction is instant and invisible.
+   *
+   *     This also fixes the post-refresh staleness: after fetchCatalogue() loads
+   *     fresh data from the API into allSongs, any Favourites card rendered will
+   *     be corrected to the API's current playCount on the spot.
+   */
+  function observeGridForSongId(grid, getPool) {
+    const observer = new MutationObserver(mutations => {
+      mutations.forEach(mut => {
+        mut.addedNodes.forEach(node => {
+          if (node.nodeType !== 1) return; /* element nodes only */
+
+          const cards = node.classList?.contains('song-card')
+            ? [node]
+            : [...node.querySelectorAll('.song-card')];
+
+          cards.forEach(card => {
+            /* ── Step 1: Resolve and stamp data-song-id ── */
+            let resolvedId = card.dataset.songId || null;
+
+            if (!resolvedId) {
+              /* Fast path: <audio> already has data-song-id from attachTrackerListeners */
+              const audioEl = card.querySelector('audio.card-audio');
+              if (audioEl?.dataset.songId) {
+                resolvedId = audioEl.dataset.songId;
+                card.dataset.songId = resolvedId;
+              }
+            }
+
+            if (!resolvedId) {
+              /* Fallback: match by "Artist – Title" heading text against the pool */
+              const heading = card.querySelector('.card-heading');
+              if (!heading) return;
+              const headingText = heading.textContent.trim();
+              const pool = getPool();
+              const match = pool.find(
+                s => headingText.includes(`${s.artist} – ${s.title}`)
+              );
+              if (match) {
+                const id = getSongId(match);
+                if (id != null) {
+                  resolvedId = String(id);
+                  card.dataset.songId = resolvedId;
+                }
+              }
+            }
+
+            if (!resolvedId) return; /* could not identify song — skip */
+
+            /* ── Step 2: Auto-correct displayed play count ── */
+            /*
+             * Look up the song in allSongs (fresh from API / updated by tracker).
+             * If its playCount differs from what's currently rendered, correct it.
+             * This silently fixes:
+             *   • Favourites cards opened after a play was already registered.
+             *   • Post-refresh Favourites rendering (allSongs has latest API data).
+             *   • Any other card rendered from a stale snapshot.
+             */
+            const livePool = getPool();
+            const liveSong = livePool.find(s => String(getSongId(s)) === resolvedId)
+                          /* also check allSongs as a global fallback */
+                          || allSongs.find(s => String(getSongId(s)) === resolvedId);
+
+            if (liveSong && liveSong.playCount != null) {
+              const pcEl = card.querySelector('.detail-play-count');
+              if (pcEl) {
+                const corrected =
+                  `<i class="bi bi-play-circle-fill me-1"></i>` +
+                  `${Number(liveSong.playCount).toLocaleString()}`;
+                /* Only rewrite if the count has changed — avoids unnecessary DOM churn */
+                const currentText = pcEl.textContent.trim();
+                if (currentText !== String(Number(liveSong.playCount).toLocaleString())) {
+                  pcEl.innerHTML = corrected;
+                }
+              }
+            }
+          });
+        });
+      });
+    });
+    observer.observe(grid, { childList: true });
+  }
+
+  observeGridForSongId(resultsGrid, () => allSongs);
+  observeGridForSongId(recentGrid, () => recentSongs);
+
+  /* ── wireAudioAutoplay wrapper ─────────────────────────────────────────── */
+
+  /*
+   * The least-invasive possible integration point.
+   *
+   * wireAudioAutoplay() is called in four places:
+   *   • buildRecentGrid()      — recent section on page load / filter
+   *   • renderResults()        — search / shuffle / favourites
+   *   (wireAudioAutoplay itself is a function declaration, so the name binding
+   *   is writable — standard JS, no monkey-patching weirdness involved.)
+   *
+   * We save a reference to the original, then replace the binding with a thin
+   * wrapper that calls the original first, then calls attachTrackerListeners
+   * with the same arguments.  All existing behaviour is preserved exactly.
+   *
+   * Because this IIFE runs synchronously at parse time — before any
+   * DOMContentLoaded handler fires — the wrapper is in place before
+   * wireAudioAutoplay() is ever called.
+   */
+  const _originalWireAudioAutoplay = wireAudioAutoplay; /* eslint-disable-line no-use-before-define */
+
+  wireAudioAutoplay = function trackedWireAudioAutoplay(audioNodes, songs = []) { /* eslint-disable-line no-func-assign */
+    /* Run all existing wiring (crossfade, preload, single-playback, media session) */
+    _originalWireAudioAutoplay(audioNodes, songs);
+    /* Attach play-count tracker listeners to the same batch of nodes */
+    attachTrackerListeners(audioNodes, songs);
+  };
+
+  /* ── Init log ──────────────────────────────────────────────────────────── */
+  console.info('[PlayTracker] Initialised — sessionId:', sessionId);
+
+})(); /* end initPlayTracker */
+
