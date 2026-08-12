@@ -366,6 +366,13 @@ function buildRecentGrid(songs) {
       return `<button class="tag-chip ${extraCls}" data-field="${field}" data-value="${escAttr(value)}" title="Filter by ${escAttr(value)}">${escHtml(value)}</button>`;
     };
 
+    const playCountVal = (song.playCount != null && song.playCount !== '') ? Number(song.playCount) : 0;
+    const playCountRow = `
+      <li class="detail-row">
+        <span class="detail-label">Plays</span>
+        <span class="detail-value detail-play-count"><i class="bi bi-play-circle-fill me-1"></i>${playCountVal.toLocaleString()}</span>
+      </li>`;
+
     const rows = [
       { label: 'Artist', valueHtml: `<span class="detail-value detail-artist">${escHtml(song.artist)}</span>`, raw: song.artist },
       { label: 'Featuring', valueHtml: featuringChips ? `<span class="detail-value tag-chips-wrap">${featuringChips}</span>` : '', raw: song.featuring || '' },
@@ -380,7 +387,7 @@ function buildRecentGrid(songs) {
         <span class="detail-label">${r.label}</span>
         ${r.valueHtml}
       </li>`)
-      .join('');
+      .join('') + playCountRow;
 
     const hasAudio = isValidAudioUrl(song.songUrl);
     const audioHTML = hasAudio
@@ -601,6 +608,13 @@ function renderResults(songs, query = {}) {
       return `<button class="tag-chip ${extraCls}" data-field="${field}" data-value="${escAttr(value)}" title="Filter by ${escAttr(value)}">${escHtml(value)}</button>`;
     };
 
+    const playCountVal = (song.playCount != null && song.playCount !== '') ? Number(song.playCount) : 0;
+    const playCountRow = `
+      <li class="detail-row">
+        <span class="detail-label">Plays</span>
+        <span class="detail-value detail-play-count"><i class="bi bi-play-circle-fill me-1"></i>${playCountVal.toLocaleString()}</span>
+      </li>`;
+
     const rows = [
       { label: 'Artist', valueHtml: `<span class="detail-value detail-artist">${escHtml(song.artist)}</span>`, raw: song.artist },
       { label: 'Featuring', valueHtml: featuringChips ? `<span class="detail-value tag-chips-wrap">${featuringChips}</span>` : '', raw: song.featuring || '' },
@@ -615,7 +629,7 @@ function renderResults(songs, query = {}) {
         <span class="detail-label">${r.label}</span>
         ${r.valueHtml}
       </li>`)
-      .join('');
+      .join('') + playCountRow;
 
     /* ── Audio preview ── */
     const hasAudio = isValidAudioUrl(song.songUrl);
@@ -1031,9 +1045,9 @@ function updateMediaSessionMeta(song) {
   if (!('mediaSession' in navigator) || !song) return;
 
   navigator.mediaSession.metadata = new MediaMetadata({
-    title:   song.title  || 'Unknown Title',
-    artist:  song.artist || 'Unknown Artist',
-    album:   song.album  || '',
+    title: song.title || 'Unknown Title',
+    artist: song.artist || 'Unknown Artist',
+    album: song.album || '',
     artwork: (song.songArt && song.songArt.trim())
       ? [{ src: song.songArt, sizes: '512x512', type: 'image/jpeg' }]
       : [],
@@ -1071,15 +1085,15 @@ function playSongByIndex(idx) {
 
   /* Update index first so pbState is already correct when the synchronous
      'play' event fires (behaviour varies across browser engines) */
-  pbState.index     = idx;
-  audio.volume      = 1;
+  pbState.index = idx;
+  audio.volume = 1;
   /* Initialise loading for preload="none" elements that haven't started yet */
   if (audio.readyState < HTMLMediaElement.HAVE_METADATA) audio.load();
   audio.currentTime = 0;
   audio.play().catch(err => console.warn('[Engine] play blocked:', err));
 
   /* Scroll the song card into view */
-  const ci   = audio.dataset.cardIndex;
+  const ci = audio.dataset.cardIndex;
   const grid = String(ci).startsWith('recent-') ? recentGrid : resultsGrid;
   const card = grid.querySelector(`.song-card[data-card-index="${ci}"]`);
   if (card) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -1172,7 +1186,7 @@ function initMediaSession() {
   /* play — resume the currently active audio element */
   navigator.mediaSession.setActionHandler('play', () => {
     const audio = pbState.nodes[pbState.index];
-    if (audio) audio.play().catch(() => {});
+    if (audio) audio.play().catch(() => { });
   });
 
   /* pause — pause the currently active audio element */
@@ -1220,8 +1234,8 @@ function showState(state) {
   resultsWrapper.classList.add('d-none');
 
   if (state === 'loading') loadingState.classList.remove('d-none');
-  if (state === 'error')   errorState.classList.remove('d-none');
-  if (state === 'empty')   emptyState.classList.remove('d-none');
+  if (state === 'error') errorState.classList.remove('d-none');
+  if (state === 'empty') emptyState.classList.remove('d-none');
   if (state === 'results') resultsWrapper.classList.remove('d-none');
 }
 
@@ -1279,7 +1293,7 @@ function isValidAudioUrl(url = '') {
 
 async function downloadSong(url, filename, btn) {
   const original = btn.innerHTML;
-  btn.disabled  = true;
+  btn.disabled = true;
   btn.innerHTML = '<i class="bi bi-arrow-down-circle me-2"></i>0%';
 
   try {
@@ -1290,9 +1304,9 @@ async function downloadSong(url, filename, btn) {
     const contentLength = response.headers.get('Content-Length');
     const total = contentLength ? parseInt(contentLength, 10) : 0;
 
-    const reader   = response.body.getReader();
-    const chunks   = [];
-    let   received = 0;
+    const reader = response.body.getReader();
+    const chunks = [];
+    let received = 0;
 
     /* Stream body and update button label in real time */
     while (true) { // eslint-disable-line no-constant-condition
@@ -1312,12 +1326,12 @@ async function downloadSong(url, filename, btn) {
     }
 
     /* All bytes received — assemble into a blob and trigger Save-As */
-    const blob    = new Blob(chunks, { type: 'audio/mpeg' });
+    const blob = new Blob(chunks, { type: 'audio/mpeg' });
     const blobUrl = URL.createObjectURL(blob);
 
     const anchor = document.createElement('a');
-    anchor.href          = blobUrl;
-    anchor.download      = filename;
+    anchor.href = blobUrl;
+    anchor.download = filename;
     anchor.style.display = 'none';
     document.body.appendChild(anchor);
     anchor.click();
@@ -1326,24 +1340,24 @@ async function downloadSong(url, filename, btn) {
     /* Release the object URL after the browser has had time to use it */
     setTimeout(() => URL.revokeObjectURL(blobUrl), 15_000);
 
-    btn.innerHTML         = '<i class="bi bi-check-circle-fill me-2"></i>Done ✓';
-    btn.style.color       = '#22c55e';
+    btn.innerHTML = '<i class="bi bi-check-circle-fill me-2"></i>Done ✓';
+    btn.style.color = '#22c55e';
     btn.style.borderColor = '#22c55e';
-    btn.style.background  = 'rgba(34,197,94,.1)';
+    btn.style.background = 'rgba(34,197,94,.1)';
 
   } catch (err) {
     console.error('Download failed:', err);
-    btn.innerHTML         = '<i class="bi bi-x-circle me-2"></i>Failed';
-    btn.style.color       = '#ef4444';
+    btn.innerHTML = '<i class="bi bi-x-circle me-2"></i>Failed';
+    btn.style.color = '#ef4444';
     btn.style.borderColor = '#ef4444';
 
   } finally {
     setTimeout(() => {
-      btn.innerHTML         = original;
-      btn.disabled          = false;
-      btn.style.color       = '';
+      btn.innerHTML = original;
+      btn.disabled = false;
+      btn.style.color = '';
       btn.style.borderColor = '';
-      btn.style.background  = '';
+      btn.style.background = '';
     }, 2500);
   }
 }
@@ -1391,8 +1405,8 @@ async function downloadSong(url, filename, btn) {
   /** Adds or removes a song from favourites; returns the new state (true = added). */
   function toggleFav(song) {
     const favs = loadFavs();
-    const key  = songKey(song);
-    const idx  = favs.findIndex(f => songKey(f) === key);
+    const key = songKey(song);
+    const idx = favs.findIndex(f => songKey(f) === key);
     if (idx === -1) {
       favs.push(song);
       saveFavs(favs);
@@ -1431,10 +1445,10 @@ async function downloadSong(url, filename, btn) {
     if (cardEl.querySelector('.btn-fav-heart')) return;
 
     const btn = document.createElement('button');
-    btn.className  = 'btn-fav-heart';
-    btn.title      = 'Add to favourites';
+    btn.className = 'btn-fav-heart';
+    btn.title = 'Add to favourites';
     btn.setAttribute('aria-label', 'Toggle favourite');
-    btn.innerHTML  = '<i class="bi bi-heart-fill"></i>';
+    btn.innerHTML = '<i class="bi bi-heart-fill"></i>';
 
     /* Reflect current saved state */
     if (isFav(song)) {
@@ -1535,7 +1549,7 @@ async function downloadSong(url, filename, btn) {
   }
 
   observeGrid(resultsGrid, card => findSongForCard(card, allSongs));
-  observeGrid(recentGrid,  card => findSongForCard(card, recentSongs));
+  observeGrid(recentGrid, card => findSongForCard(card, recentSongs));
 
   /* ── Inline favourites view (renders into the main resultsGrid) ── */
 
@@ -1558,7 +1572,7 @@ async function downloadSong(url, filename, btn) {
     if (favs.length === 0) {
       showState('empty');
       /* Swap the empty-state copy to be favourites-specific */
-      document.querySelector('#emptyState h4').textContent    = 'No favourites yet';
+      document.querySelector('#emptyState h4').textContent = 'No favourites yet';
       document.querySelector('#emptyState .text-muted').textContent =
         'Tap the \u2665 icon on any song card to save it here.';
       document.querySelector('#emptyState .empty-icon').className =
@@ -1606,20 +1620,27 @@ async function downloadSong(url, filename, btn) {
         return `<button class="tag-chip ${extraCls}" data-field="${field}" data-value="${escAttr(value)}" title="Filter by ${escAttr(value)}">${escHtml(value)}</button>`;
       };
 
+      const playCountVal = (song.playCount != null && song.playCount !== '') ? Number(song.playCount) : 0;
+      const playCountRow = `
+        <li class="detail-row">
+          <span class="detail-label">Plays</span>
+          <span class="detail-value detail-play-count"><i class="bi bi-play-circle-fill me-1"></i>${playCountVal.toLocaleString()}</span>
+        </li>`;
+
       const rows = [
-        { label: 'Artist',    valueHtml: `<span class="detail-value detail-artist">${escHtml(song.artist)}</span>`, raw: song.artist },
+        { label: 'Artist', valueHtml: `<span class="detail-value detail-artist">${escHtml(song.artist)}</span>`, raw: song.artist },
         { label: 'Featuring', valueHtml: featuringChips ? `<span class="detail-value tag-chips-wrap">${featuringChips}</span>` : '', raw: song.featuring || '' },
-        { label: 'Category',  valueHtml: `<span class="detail-value detail-category">${chip('category', song.category || '', 'tag-chip--category')}</span>`, raw: song.category || '' },
-        { label: 'Genre',     valueHtml: `<span class="detail-value">${chip('genre', song.genre || '', 'tag-chip--genre')}</span>`, raw: song.genre || '' },
-        { label: 'Album',     valueHtml: `<span class="detail-value">${chip('album', song.album || '', 'tag-chip--album')}</span>`, raw: song.album || '' },
-        { label: 'Released',  valueHtml: `<span class="detail-value">${chip('released', song.released || '', 'tag-chip--released')}</span>`, raw: song.released || '' },
+        { label: 'Category', valueHtml: `<span class="detail-value detail-category">${chip('category', song.category || '', 'tag-chip--category')}</span>`, raw: song.category || '' },
+        { label: 'Genre', valueHtml: `<span class="detail-value">${chip('genre', song.genre || '', 'tag-chip--genre')}</span>`, raw: song.genre || '' },
+        { label: 'Album', valueHtml: `<span class="detail-value">${chip('album', song.album || '', 'tag-chip--album')}</span>`, raw: song.album || '' },
+        { label: 'Released', valueHtml: `<span class="detail-value">${chip('released', song.released || '', 'tag-chip--released')}</span>`, raw: song.released || '' },
       ]
         .filter(r => r.raw.trim() !== '')
         .map(r => `
         <li class="detail-row">
           <span class="detail-label">${r.label}</span>
           ${r.valueHtml}
-        </li>`).join('');
+        </li>`).join('') + playCountRow;
 
       /* ── Audio preview ── */
       const hasAudio = isValidAudioUrl(song.songUrl);
@@ -1645,7 +1666,7 @@ async function downloadSong(url, filename, btn) {
       cardEl.className = 'song-card';
       cardEl.style.animationDelay = `${Math.min(idx * 0.05, 0.5)}s`;
       cardEl.dataset.cardIndex = `fav-${idx}`;
-      cardEl.dataset.favKey    = songKey(song);
+      cardEl.dataset.favKey = songKey(song);
       cardEl.innerHTML = `
         <div class="card-num" data-num="${idx + 1}">${idx + 1}</div>
         <div class="card-art-wrap">
@@ -1707,9 +1728,9 @@ async function downloadSong(url, filename, btn) {
   });
 
   /* ── Exit fav view whenever a real search, clear, or shuffle fires ── */
-  searchBtn.addEventListener('click',    () => { isFavView = false; }, true);
-  clearBtn.addEventListener('click',     () => { isFavView = false; }, true);
-  retryBtn.addEventListener('click',     () => { isFavView = false; }, true);
+  searchBtn.addEventListener('click', () => { isFavView = false; }, true);
+  clearBtn.addEventListener('click', () => { isFavView = false; }, true);
+  retryBtn.addEventListener('click', () => { isFavView = false; }, true);
 
   /* Shuffle buttons — must reset isFavView so a heart-toggle during shuffled
      playback does NOT reload the favourites view over the shuffled songs. */
@@ -1743,12 +1764,12 @@ async function downloadSong(url, filename, btn) {
   const SHUFFLE_COUNT = 50; /* max songs per shuffle */
 
   /* ── DOM refs ──────────────────────────────── */
-  const shuffleBtn            = document.getElementById('shuffleBtn');
-  const dropdownToggle        = document.getElementById('shuffleDropdownToggle');
-  const dropdownEl            = document.getElementById('shuffleDropdown');
-  const shuffleSplitWrap      = document.getElementById('shuffleSplitWrap');
-  const dropdownItems         = dropdownEl.querySelectorAll('.shuffle-dropdown-item');
-  const chevronIcon           = dropdownToggle.querySelector('.shuffle-chevron-icon');
+  const shuffleBtn = document.getElementById('shuffleBtn');
+  const dropdownToggle = document.getElementById('shuffleDropdownToggle');
+  const dropdownEl = document.getElementById('shuffleDropdown');
+  const shuffleSplitWrap = document.getElementById('shuffleSplitWrap');
+  const dropdownItems = dropdownEl.querySelectorAll('.shuffle-dropdown-item');
+  const chevronIcon = dropdownToggle.querySelector('.shuffle-chevron-icon');
 
   /* ── State ─────────────────────────────────── */
   /* Active mode: 'all' | 'nigerian' | 'foreign' */
@@ -1765,14 +1786,14 @@ async function downloadSong(url, filename, btn) {
    */
   function pickRandom(pool, count) {
     const copy = pool.slice();          /* shallow copy — never touch allSongs */
-    const n    = copy.length;
+    const n = copy.length;
     const take = Math.min(count, n);    /* graceful: return all if fewer than count */
 
     for (let i = 0; i < take; i++) {
-      const j    = i + Math.floor(Math.random() * (n - i));
-      const tmp  = copy[i];
-      copy[i]    = copy[j];
-      copy[j]    = tmp;
+      const j = i + Math.floor(Math.random() * (n - i));
+      const tmp = copy[i];
+      copy[i] = copy[j];
+      copy[j] = tmp;
     }
 
     return copy.slice(0, take);
@@ -1809,15 +1830,15 @@ async function downloadSong(url, filename, btn) {
   function buildStatusHtml(mode, count) {
     if (mode === 'nigerian') {
       return `<i class="bi bi-shuffle me-1" style="color:#f59e0b;font-size:.9em"></i> ` +
-             `🇳🇬 Nigerian Shuffle — <strong>${count}</strong> random Nigerian song${count !== 1 ? 's' : ''} selected.`;
+        `🇳🇬 Nigerian Shuffle — <strong>${count}</strong> random Nigerian song${count !== 1 ? 's' : ''} selected.`;
     }
     if (mode === 'foreign') {
       return `<i class="bi bi-shuffle me-1" style="color:#818cf8;font-size:.9em"></i> ` +
-             `🌎 International Shuffle — <strong>${count}</strong> random foreign song${count !== 1 ? 's' : ''} selected.`;
+        `🌎 International Shuffle — <strong>${count}</strong> random foreign song${count !== 1 ? 's' : ''} selected.`;
     }
     /* 'all' */
     return `<i class="bi bi-shuffle me-1" style="color:#2dd4bf;font-size:.9em"></i> ` +
-           `🔀 Shuffle Mix — <strong>${count}</strong> random song${count !== 1 ? 's' : ''} from your catalogue.`;
+      `🔀 Shuffle Mix — <strong>${count}</strong> random song${count !== 1 ? 's' : ''} from your catalogue.`;
   }
 
   /* ── Core execute-shuffle ───────────────────── */
@@ -1834,7 +1855,7 @@ async function downloadSong(url, filename, btn) {
       shuffleBtn.classList.remove('shuffling');
     }, { once: true });
 
-    const pool   = getPool(mode);
+    const pool = getPool(mode);
     const picked = pickRandom(pool, SHUFFLE_COUNT);
 
     if (picked.length === 0) {
@@ -1919,8 +1940,8 @@ async function downloadSong(url, filename, btn) {
   /* ── Keyboard: dropdown arrow-key navigation ─── */
   dropdownEl.addEventListener('keydown', e => {
     const items = [...dropdownEl.querySelectorAll('.shuffle-dropdown-item')];
-    const cur   = document.activeElement;
-    const idx   = items.indexOf(cur);
+    const cur = document.activeElement;
+    const idx = items.indexOf(cur);
 
     if (e.key === 'ArrowDown') {
       e.preventDefault();

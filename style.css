@@ -809,6 +809,14 @@ body {
   font-weight: 600;
 }
 
+.detail-value.detail-play-count {
+  color: #2dd4bf;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: .2rem;
+}
+
 /* ── Tag chips (clickable filter triggers inside cards) ─── */
 .tag-chips-wrap {
   display: flex;
