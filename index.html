@@ -8,6 +8,25 @@
   <meta name="description"
     content="Search and stream thousands of songs by title, artist or album. Powered by the SJr Music API." />
 
+  <!-- PWA Manifest -->
+  <link rel="manifest" href="manifest.json" />
+
+  <!-- Theme colour (browser chrome, Android, PWA title bar) -->
+  <meta name="theme-color" content="#7c3aed" />
+
+  <!-- Android / Chrome -->
+  <meta name="mobile-web-app-capable" content="yes" />
+
+  <!-- iOS Safari -->
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="SJrMusic" />
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png" />
+  <link rel="icon" type="image/png" sizes="512x512" href="icons/icon-512.png" />
+
   <!-- Google Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -241,8 +260,36 @@
     </div>
   </footer>
 
+  <!-- ───────────── PWA INSTALL BANNER ───────────── -->
+  <!--
+    Hidden by default. Shown by initPWAInstall() in app.js
+    when the browser fires beforeinstallprompt.
+    Hidden again after appinstalled or user dismissal.
+  -->
+  <div id="pwaInstallBanner" class="pwa-install-banner" role="complementary"
+    aria-label="Install SJrMusic app" aria-hidden="true">
+    <div class="pwa-install-inner">
+      <span class="pwa-install-icon" aria-hidden="true">
+        <i class="bi bi-phone-fill"></i>
+      </span>
+      <div class="pwa-install-text">
+        <strong>Install SJrMusic</strong>
+        <span class="pwa-install-sub">Add to your home screen for a faster experience</span>
+      </div>
+      <button id="pwaInstallBtn" class="btn-pwa-install" aria-label="Install SJrMusic">
+        <i class="bi bi-download me-1"></i>Install
+      </button>
+      <button id="pwaInstallDismiss" class="btn-pwa-dismiss" aria-label="Dismiss install prompt">
+        <i class="bi bi-x-lg"></i>
+      </button>
+    </div>
+  </div>
+
   <!-- Bootstrap JS -->
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+
+  <!-- IndexedDB abstraction (loaded before app.js so SJrIDB is globally available) -->
+  <script src="idb.js"></script>
 
   <!-- App Script -->
   <script src="app.js"></script>

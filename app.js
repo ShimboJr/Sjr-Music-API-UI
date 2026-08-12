@@ -2563,3 +2563,404 @@ async function downloadSong(url, filename, btn) {
 
 })(); /* end initPlayTracker */
 
+
+/* =====================================================
+   SERVICE WORKER REGISTRATION  (PWA)
+
+   Registers sw.js from the app's own origin.
+   Handles the "new version available" update flow
+   by showing a polished toast notification.
+
+   Design:
+   • Progressive enhancement — no-ops silently on
+     browsers that don't support service workers.
+   • Shows a toast so the user can choose when to
+     reload (prevents mid-session disruption).
+   • sw.js itself calls skipWaiting() during install
+     so fresh installs activate immediately.
+   ===================================================== */
+
+(function initServiceWorker() {
+
+  if (!('serviceWorker' in navigator)) {
+    console.info('[SW] Service Workers not supported in this browser.');
+    return;
+  }
+
+  let updateToast = null;
+  let pendingRegistration = null;
+
+  function buildUpdateToast() {
+    if (updateToast) return updateToast;
+
+    updateToast = document.createElement('div');
+    updateToast.className = 'pwa-update-toast';
+    updateToast.setAttribute('role', 'alert');
+    updateToast.setAttribute('aria-live', 'polite');
+    updateToast.innerHTML = `
+      <div class="pwa-update-toast-text">
+        <strong>SJrMusic updated!</strong><br>
+        A new version is ready.
+      </div>
+      <button class="btn-pwa-update" id="pwaUpdateBtn">Reload</button>`;
+
+    document.body.appendChild(updateToast);
+
+    document.getElementById('pwaUpdateBtn').addEventListener('click', () => {
+      if (pendingRegistration && pendingRegistration.waiting) {
+        pendingRegistration.waiting.postMessage({ type: 'SKIP_WAITING' });
+      }
+      window.location.reload();
+    });
+
+    return updateToast;
+  }
+
+  function showUpdateToast(registration) {
+    pendingRegistration = registration;
+    const toast = buildUpdateToast();
+    setTimeout(() => toast.classList.add('pwa-toast-visible'), 800);
+    console.info('[SW] Update available — showing reload toast.');
+  }
+
+  function trackInstalling(registration) {
+    const installing = registration.installing;
+    if (!installing) return;
+
+    installing.addEventListener('statechange', () => {
+      if (installing.state === 'installed' && navigator.serviceWorker.controller) {
+        showUpdateToast(registration);
+      }
+    });
+  }
+
+  navigator.serviceWorker.register('/sw.js', { scope: '/' })
+    .then(registration => {
+      console.info('[SW] Registered — scope:', registration.scope);
+
+      if (registration.waiting && navigator.serviceWorker.controller) {
+        showUpdateToast(registration);
+      }
+
+      trackInstalling(registration);
+
+      registration.addEventListener('updatefound', () => {
+        trackInstalling(registration);
+      });
+
+      let initialController = navigator.serviceWorker.controller;
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (initialController) {
+          window.location.reload();
+        }
+        initialController = navigator.serviceWorker.controller;
+      });
+    })
+    .catch(err => {
+      console.warn('[SW] Registration failed:', err);
+    });
+
+  navigator.serviceWorker.addEventListener('message', (event) => {
+    if (!event.data) return;
+    if (event.data.type === 'SW_VERSION') {
+      console.info('[SW] Version info:', event.data);
+    }
+  });
+
+})();
+
+
+/* =====================================================
+   PWA INSTALL PROMPT  (PWA)
+
+   Listens for beforeinstallprompt (Chromium) and shows
+   a polished install banner.  No-ops gracefully on
+   browsers that don't support the prompt.
+   ===================================================== */
+
+(function initPWAInstall() {
+
+  const LS_DISMISSED_KEY = 'sjrmusic_install_dismissed';
+
+  let deferredPrompt = null;
+  const banner     = document.getElementById('pwaInstallBanner');
+  const installBtn = document.getElementById('pwaInstallBtn');
+  const dismissBtn = document.getElementById('pwaInstallDismiss');
+
+  if (!banner || !installBtn || !dismissBtn) return;
+
+  function showBanner() {
+    banner.classList.add('pwa-banner-visible');
+    banner.removeAttribute('aria-hidden');
+    console.info('[PWA Install] Banner shown.');
+  }
+
+  function hideBanner() {
+    banner.classList.remove('pwa-banner-visible');
+    banner.setAttribute('aria-hidden', 'true');
+  }
+
+  function isStandalone() {
+    return (
+      window.matchMedia('(display-mode: standalone)').matches ||
+      window.navigator.standalone === true
+    );
+  }
+
+  if (isStandalone() || localStorage.getItem(LS_DISMISSED_KEY) === 'true') {
+    return;
+  }
+
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    deferredPrompt = e;
+    setTimeout(showBanner, 2000);
+  });
+
+  installBtn.addEventListener('click', async () => {
+    if (!deferredPrompt) return;
+    hideBanner();
+    deferredPrompt.prompt();
+    const { outcome } = await deferredPrompt.userChoice;
+    console.info('[PWA Install] User choice:', outcome);
+    deferredPrompt = null;
+  });
+
+  dismissBtn.addEventListener('click', () => {
+    hideBanner();
+    deferredPrompt = null;
+    try { localStorage.setItem(LS_DISMISSED_KEY, 'true'); } catch { /* quota */ }
+    console.info('[PWA Install] Banner dismissed by user.');
+  });
+
+  window.addEventListener('appinstalled', () => {
+    hideBanner();
+    deferredPrompt = null;
+    try { localStorage.removeItem(LS_DISMISSED_KEY); } catch { /* quota */ }
+    console.info('[PWA Install] App installed successfully.');
+  });
+
+})();
+
+
+/* =====================================================
+   MEDIA SESSION — SEEK EXTENSIONS  (PWA)
+
+   Registers seekbackward / seekforward on top of the
+   existing initMediaSession() handlers, enabling seek
+   buttons on Android lock screen and car controls.
+   ===================================================== */
+
+(function enhanceMediaSessionSeek() {
+
+  if (!('mediaSession' in navigator)) return;
+
+  const SEEK_STEP = 5; /* seconds */
+
+  function getActiveAudio() {
+    return (pbState.nodes && pbState.nodes[pbState.index]) || null;
+  }
+
+  try {
+    navigator.mediaSession.setActionHandler('seekbackward', (details) => {
+      const audio = getActiveAudio();
+      if (!audio) return;
+      const step = (details && details.seekOffset != null) ? details.seekOffset : SEEK_STEP;
+      audio.currentTime = Math.max(0, audio.currentTime - step);
+    });
+  } catch { /* not supported — silently skip */ }
+
+  try {
+    navigator.mediaSession.setActionHandler('seekforward', (details) => {
+      const audio = getActiveAudio();
+      if (!audio) return;
+      const step = (details && details.seekOffset != null) ? details.seekOffset : SEEK_STEP;
+      const max = isFinite(audio.duration) ? audio.duration : Infinity;
+      audio.currentTime = Math.min(max, audio.currentTime + step);
+    });
+  } catch { /* not supported — silently skip */ }
+
+  console.info('[MediaSession] seekbackward / seekforward handlers registered.');
+
+})();
+
+
+/* =====================================================
+   OFFLINE PLAY-COUNT SYNC  (PWA)
+
+   When POST /music/:id/play fails due to a network
+   error, the play event is queued in IndexedDB.
+   When connectivity returns, all queued events are
+   retried.  eventId idempotency on the backend
+   prevents double-counting.
+
+   Two parts:
+   1. window.fetch patch — intercepts POST /play failures
+      and queues them via SJrIDB.addPendingPlay().
+   2. Sync runner — on window 'online' and on page load,
+      drains the queue by POSTing to the backend.
+   ===================================================== */
+
+(function initOfflinePlaySync() {
+
+  /* ── Sync runner ─────────────────────────────── */
+
+  async function syncPendingPlays() {
+    if (typeof SJrIDB === 'undefined') return;
+    if (!navigator.onLine) return;
+
+    let pending;
+    try {
+      await SJrIDB.open();
+      pending = await SJrIDB.getPendingPlays();
+    } catch (err) {
+      console.warn('[OfflineSync] Could not read pending plays:', err);
+      return;
+    }
+
+    if (pending.length === 0) return;
+    console.info(`[OfflineSync] Syncing ${pending.length} pending play event(s)…`);
+
+    for (const event of pending) {
+      const { songId, eventId, sessionId, listenedSeconds, duration } = event;
+      if (!songId || !eventId) {
+        await SJrIDB.removePendingPlay(eventId).catch(() => {});
+        continue;
+      }
+
+      try {
+        const res = await fetch(`${API_URL}/${songId}/play`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ eventId, sessionId, listenedSeconds, duration }),
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.success) {
+            console.info(
+              `[OfflineSync] ✓ Synced eventId: ${eventId}`,
+              data.counted ? `→ counted (playCount: ${data.playCount})` : '→ already counted (idempotent)'
+            );
+            /* Update live catalogue if backend confirmed a new count */
+            if (data.counted && data.playCount != null) {
+              const sid = String(data.songId);
+              for (const s of allSongs) {
+                if (String(s.id || s._id) === sid) s.playCount = data.playCount;
+              }
+            }
+          }
+          await SJrIDB.removePendingPlay(eventId);
+        } else {
+          console.warn(`[OfflineSync] Server ${res.status} for eventId ${eventId} — will retry.`);
+        }
+      } catch (fetchErr) {
+        console.warn('[OfflineSync] Network error — stopping sync. Events remain queued.', fetchErr.message);
+        break;
+      }
+    }
+  }
+
+  /* ── Queue helper (exposed globally for fetch patch) ── */
+
+  window.sjrQueueOfflinePlay = async function (songId, payload) {
+    if (typeof SJrIDB === 'undefined') {
+      console.warn('[OfflineSync] SJrIDB unavailable — play event lost.');
+      return;
+    }
+    try {
+      await SJrIDB.open();
+      await SJrIDB.addPendingPlay({
+        songId: String(songId),
+        eventId: payload.eventId,
+        sessionId: payload.sessionId,
+        listenedSeconds: payload.listenedSeconds,
+        duration: payload.duration,
+        createdAt: new Date().toISOString(),
+      });
+      const count = await SJrIDB.getPendingPlayCount();
+      console.info(`[OfflineSync] Play queued — total pending: ${count}`);
+    } catch (err) {
+      console.warn('[OfflineSync] Failed to queue play event:', err);
+    }
+  };
+
+  /* ── Trigger sync on reconnect ─────────────────── */
+  window.addEventListener('online', () => {
+    console.info('[OfflineSync] Connection restored — syncing…');
+    setTimeout(syncPendingPlays, 1500);
+  });
+
+  /* ── Sync on page load (picks up previous offline sessions) ── */
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => {
+      if (navigator.onLine) setTimeout(syncPendingPlays, 3000);
+    });
+  } else {
+    if (navigator.onLine) setTimeout(syncPendingPlays, 3000);
+  }
+
+  console.info('[OfflineSync] Initialised.');
+
+})();
+
+
+/* =====================================================
+   FETCH PATCH — OFFLINE PLAY-COUNT QUEUING  (PWA)
+
+   Targeted, minimal patch: intercepts only POST requests
+   to /music/:id/play that fail with a network error.
+   All other fetch() calls are completely untouched.
+
+   When the fetch throws (offline / network failure):
+   → The play event payload is stored in IndexedDB
+     via window.sjrQueueOfflinePlay().
+   → The error is re-thrown so initPlayTracker's catch
+     block still runs (it logs the warning and keeps
+     playCountRegistered=true to prevent tracker retries).
+
+   SECURITY: The payload contains only:
+     eventId, sessionId, listenedSeconds, duration
+   No credentials are stored.
+   ===================================================== */
+
+(function patchFetchForOfflinePlayCount() {
+
+  const PLAY_ENDPOINT_RE = /\/music\/[^/]+\/play$/i;
+  const _originalFetch   = window.fetch;
+
+  window.fetch = async function pwaFetch(input, init) {
+    const url    = typeof input === 'string' ? input : (input.url || '');
+    const method = (init && init.method ? init.method : (input.method || 'GET')).toUpperCase();
+
+    /* Only intercept POST to play endpoint */
+    if (method === 'POST' && PLAY_ENDPOINT_RE.test(url)) {
+      try {
+        return await _originalFetch(input, init);
+      } catch (networkErr) {
+        console.warn('[OfflineSync] POST /play network error — queueing:', networkErr.message);
+
+        if (init && init.body && typeof window.sjrQueueOfflinePlay === 'function') {
+          try {
+            const payload = JSON.parse(init.body);
+            const match   = url.match(/\/music\/([^/]+)\/play/i);
+            const songId  = match ? match[1] : null;
+            if (songId && payload.eventId) {
+              await window.sjrQueueOfflinePlay(songId, payload);
+            }
+          } catch (parseErr) {
+            console.warn('[OfflineSync] Could not parse play payload:', parseErr);
+          }
+        }
+
+        throw networkErr; /* re-throw for registerPlayCount's catch */
+      }
+    }
+
+    /* All other requests — completely untouched */
+    return _originalFetch(input, init);
+  };
+
+  console.info('[OfflineSync] fetch patched for offline play-count queuing.');
+
+})();
