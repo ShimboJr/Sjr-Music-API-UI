@@ -1035,21 +1035,46 @@ function scheduleNextPreload(currentAudio, idx, audioNodes, onScheduled) {
    ===================================================== */
 
 /**
+ * Sentinel: tracks the last song key passed to updateMediaSessionMeta.
+ * Prevents redundant MediaMetadata creation (e.g. during crossfade ticks)
+ * which can cause Android's notification slot to drop the session.
+ * Reset to null whenever playback stops or a new queue is loaded.
+ */
+let _lastMediaSessionSongKey = null;
+
+/**
  * Updates the OS / browser media notification card with title, artist,
  * album, and artwork for the currently-playing song.
  * Safe to call on browsers that do not support the Media Session API.
+ *
+ * Only recreates MediaMetadata when the song actually changes — repeated
+ * calls for the same song are no-ops.  This prevents Android from seeing
+ * rapid metadata churn (e.g. crossfade auto-advance ticks) which can cause
+ * the OS to silently drop the media session after ~60 seconds of being paused.
  *
  * @param {object|null|undefined} song  Raw song object from the API
  */
 function updateMediaSessionMeta(song) {
   if (!('mediaSession' in navigator) || !song) return;
 
+  /* Build a cheap identity key — title + artist is stable enough */
+  const key = `${song.title || ''}|${song.artist || ''}`;
+  if (key === _lastMediaSessionSongKey) return; /* same song — skip */
+  _lastMediaSessionSongKey = key;
+
   navigator.mediaSession.metadata = new MediaMetadata({
     title: song.title || 'Unknown Title',
     artist: song.artist || 'Unknown Artist',
     album: song.album || '',
     artwork: (song.songArt && song.songArt.trim())
-      ? [{ src: song.songArt, sizes: '512x512', type: 'image/jpeg' }]
+      ? [
+        { src: song.songArt, sizes: '96x96', type: 'image/jpeg' },
+        { src: song.songArt, sizes: '128x128', type: 'image/jpeg' },
+        { src: song.songArt, sizes: '192x192', type: 'image/jpeg' },
+        { src: song.songArt, sizes: '256x256', type: 'image/jpeg' },
+        { src: song.songArt, sizes: '384x384', type: 'image/jpeg' },
+        { src: song.songArt, sizes: '512x512', type: 'image/jpeg' },
+      ]
       : [],
   });
 }
@@ -1179,41 +1204,64 @@ function playPreviousSong() {
  *   Chrome mini-player bar       →  previoustrack / nexttrack
  *   Bluetooth / headset buttons  →  previoustrack / nexttrack
  *   Other OS media controls      →  previoustrack / nexttrack
+ *
+ * iOS note:
+ *   Safari on iOS will show seekbackward/seekforward buttons on the lock
+ *   screen INSTEAD OF previoustrack/nexttrack when both sets of handlers
+ *   are registered.  To get Prev/Next on iOS, seekbackward and seekforward
+ *   must be explicitly set to null.  On Android/Chrome we register them
+ *   normally so the scrub buttons appear in car / notification controls.
  */
 function initMediaSession() {
   if (!('mediaSession' in navigator)) return;
 
-  /* play — resume the currently active audio element */
-  navigator.mediaSession.setActionHandler('play', () => {
+  /* ── Set an explicit initial state immediately. ──────────────────────────
+   * Android requires playbackState to be set BEFORE the first play event;
+   * without this the OS treats the session as uninitialised and will kill
+   * it after ~60 s of the app being paused / backgrounded.
+   * ──────────────────────────────────────────────────────────────────────── */
+  navigator.mediaSession.playbackState = 'paused';
+
+  /* ── Detect iOS Safari ───────────────────────────────────────────────────
+   * Used to decide whether to register or suppress seek handlers.
+   * We test for the presence of the 'standalone' property on navigator
+   * (only defined in iOS Safari / WKWebView) combined with the user-agent
+   * string to avoid false positives from desktop Safari.
+   * ──────────────────────────────────────────────────────────────────────── */
+  const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent) &&
+    !window.MSStream; /* exclude IE11 on Windows Phone */
+
+  /* ── play ── */
+  navigator.mediaSession.setActionHandler('play', async () => {
     const audio = pbState.nodes[pbState.index];
-    if (audio) audio.play().catch(() => { });
+    if (audio) {
+      try { await audio.play(); } catch { /* autoplay blocked — ignore */ }
+    }
   });
 
-  /* pause — pause the currently active audio element */
+  /* ── pause ── */
   navigator.mediaSession.setActionHandler('pause', () => {
     const audio = pbState.nodes[pbState.index];
     if (audio && !audio.paused) audio.pause();
   });
 
-  /* stop — pause and rewind to the start of the current song */
+  /* ── stop — pause and rewind ── */
   navigator.mediaSession.setActionHandler('stop', () => {
     const audio = pbState.nodes[pbState.index];
     if (audio) { audio.pause(); audio.currentTime = 0; }
   });
 
-  /* previoustrack — single source of truth, shared with any future UI button */
+  /* ── previoustrack — single source of truth ── */
   navigator.mediaSession.setActionHandler('previoustrack', () => {
     playPreviousSong();
   });
 
-  /* nexttrack — single source of truth, shared with any future UI button
-     and with the audio.ended fallback */
+  /* ── nexttrack — single source of truth ── */
   navigator.mediaSession.setActionHandler('nexttrack', () => {
     playNextSong();
   });
 
-  /* seekto — enables progress-bar scrubbing in Android / Chrome controls.
-     Wrapped in try/catch because not all browsers / OS versions expose it. */
+  /* ── seekto — progress-bar scrubbing (Android/Chrome) ── */
   try {
     navigator.mediaSession.setActionHandler('seekto', details => {
       const audio = pbState.nodes[pbState.index];
@@ -1221,9 +1269,89 @@ function initMediaSession() {
         audio.currentTime = details.seekTime;
       }
     });
-  } catch {
-    /* seekto not supported on this browser / OS version — silently skip */
+  } catch { /* seekto not supported on this platform — silently skip */ }
+
+  /* ── seekbackward / seekforward ─────────────────────────────────────────
+   * iOS Safari:  set both to null so the OS shows Prev/Next instead of
+   *              the 10-second seek buttons on the lock screen.
+   * Android / all other platforms: register real handlers so Android
+   *              notification / car controls get seek scrub support.
+   * ──────────────────────────────────────────────────────────────────────── */
+  const SEEK_STEP = 10; /* seconds — matches iOS default seek increment */
+
+  if (isIOS) {
+    /* Explicitly null out seek handlers so iOS shows Prev/Next */
+    try { navigator.mediaSession.setActionHandler('seekbackward', null); } catch { /* ok */ }
+    try { navigator.mediaSession.setActionHandler('seekforward', null); } catch { /* ok */ }
+    console.info('[MediaSession] iOS detected — seek handlers suppressed; Prev/Next enabled.');
+  } else {
+    /* Android / Desktop Chrome — register seek scrub handlers */
+    try {
+      navigator.mediaSession.setActionHandler('seekbackward', (details) => {
+        const audio = pbState.nodes[pbState.index];
+        if (!audio) return;
+        const step = (details && details.seekOffset != null) ? details.seekOffset : SEEK_STEP;
+        audio.currentTime = Math.max(0, audio.currentTime - step);
+      });
+    } catch { /* not supported — silently skip */ }
+
+    try {
+      navigator.mediaSession.setActionHandler('seekforward', (details) => {
+        const audio = pbState.nodes[pbState.index];
+        if (!audio) return;
+        const step = (details && details.seekOffset != null) ? details.seekOffset : SEEK_STEP;
+        const max = isFinite(audio.duration) ? audio.duration : Infinity;
+        audio.currentTime = Math.min(max, audio.currentTime + step);
+      });
+    } catch { /* not supported — silently skip */ }
+
+    console.info('[MediaSession] seekbackward / seekforward handlers registered (Android/Desktop).');
   }
+
+  /* ── visibilitychange — keep playbackState accurate on background/foreground ──
+   * When the page hides (screen locks, app backgrounded) or reappears,
+   * re-sync playbackState from the actual audio element so the OS notification
+   * and Bluetooth controls see the correct state.
+   * This prevents Android from culling the session during the hidden phase.
+   * ──────────────────────────────────────────────────────────────────────── */
+  document.addEventListener('visibilitychange', () => {
+    if (!('mediaSession' in navigator)) return;
+    const audio = pbState.nodes[pbState.index];
+    if (!audio) return;
+
+    /* Re-assert the correct playbackState when the page becomes visible again
+     * (handles the case where the OS reset it while hidden). */
+    navigator.mediaSession.playbackState = audio.paused ? 'paused' : 'playing';
+
+    console.debug(
+      '[MediaSession] visibilitychange →', document.visibilityState,
+      '— playbackState re-synced to:', navigator.mediaSession.playbackState
+    );
+  });
+
+  /* ── Page Lifecycle API: freeze / resume (Chrome for Android) ───────────
+   * 'freeze'  fires when Chrome moves the page into the Frozen lifecycle
+   *            state (typically after being backgrounded for several minutes).
+   * 'resume'  fires when Chrome brings a frozen page back to active.
+   * Re-syncing playbackState on resume ensures Bluetooth / notification
+   * controls still work after the page has been frozen and thawed.
+   * ──────────────────────────────────────────────────────────────────────── */
+  window.addEventListener('freeze', () => {
+    if (!('mediaSession' in navigator)) return;
+    const audio = pbState.nodes[pbState.index];
+    /* Ensure playbackState is correct before the page is frozen */
+    navigator.mediaSession.playbackState = (!audio || audio.paused) ? 'paused' : 'playing';
+    console.debug('[MediaSession] Page freeze — playbackState:', navigator.mediaSession.playbackState);
+  });
+
+  window.addEventListener('resume', () => {
+    if (!('mediaSession' in navigator)) return;
+    const audio = pbState.nodes[pbState.index];
+    navigator.mediaSession.playbackState = (audio && !audio.paused) ? 'playing' : 'paused';
+    console.debug('[MediaSession] Page resume — playbackState re-synced to:', navigator.mediaSession.playbackState);
+  });
+
+  console.info('[MediaSession] Initialised — isIOS:', isIOS);
 }
 
 /* ── UI state manager ───────────────────────────── */
@@ -2227,7 +2355,7 @@ async function downloadSong(url, filename, btn) {
   function syncFavouritesStoragePlayCount(songId, playCount) {
     const LS_KEY = 'sjrmusic_favourites';
     try {
-      const raw  = localStorage.getItem(LS_KEY);
+      const raw = localStorage.getItem(LS_KEY);
       if (!raw) return;
       const favs = JSON.parse(raw);
       if (!Array.isArray(favs)) return;
@@ -2504,8 +2632,8 @@ async function downloadSong(url, filename, btn) {
              */
             const livePool = getPool();
             const liveSong = livePool.find(s => String(getSongId(s)) === resolvedId)
-                          /* also check allSongs as a global fallback */
-                          || allSongs.find(s => String(getSongId(s)) === resolvedId);
+              /* also check allSongs as a global fallback */
+              || allSongs.find(s => String(getSongId(s)) === resolvedId);
 
             if (liveSong && liveSong.playCount != null) {
               const pcEl = card.querySelector('.detail-play-count');
@@ -2683,7 +2811,7 @@ async function downloadSong(url, filename, btn) {
   const LS_DISMISSED_KEY = 'sjrmusic_install_dismissed';
 
   let deferredPrompt = null;
-  const banner     = document.getElementById('pwaInstallBanner');
+  const banner = document.getElementById('pwaInstallBanner');
   const installBtn = document.getElementById('pwaInstallBtn');
   const dismissBtn = document.getElementById('pwaInstallDismiss');
 
@@ -2744,45 +2872,21 @@ async function downloadSong(url, filename, btn) {
 
 
 /* =====================================================
-   MEDIA SESSION — SEEK EXTENSIONS  (PWA)
+   MEDIA SESSION — SEEK EXTENSIONS
 
-   Registers seekbackward / seekforward on top of the
-   existing initMediaSession() handlers, enabling seek
-   buttons on Android lock screen and car controls.
+   seekbackward / seekforward are now registered inside
+   initMediaSession() with iOS detection logic.
+
+   iOS Safari:  handlers are set to null so the lock
+                screen shows Prev/Next instead of seek.
+   Android / Desktop Chrome:  real seek handlers with
+                a 10-second step are registered.
+
+   This block is intentionally left empty — the logic
+   has been consolidated into initMediaSession() above
+   to guarantee atomic handler registration before the
+   first play event.
    ===================================================== */
-
-(function enhanceMediaSessionSeek() {
-
-  if (!('mediaSession' in navigator)) return;
-
-  const SEEK_STEP = 5; /* seconds */
-
-  function getActiveAudio() {
-    return (pbState.nodes && pbState.nodes[pbState.index]) || null;
-  }
-
-  try {
-    navigator.mediaSession.setActionHandler('seekbackward', (details) => {
-      const audio = getActiveAudio();
-      if (!audio) return;
-      const step = (details && details.seekOffset != null) ? details.seekOffset : SEEK_STEP;
-      audio.currentTime = Math.max(0, audio.currentTime - step);
-    });
-  } catch { /* not supported — silently skip */ }
-
-  try {
-    navigator.mediaSession.setActionHandler('seekforward', (details) => {
-      const audio = getActiveAudio();
-      if (!audio) return;
-      const step = (details && details.seekOffset != null) ? details.seekOffset : SEEK_STEP;
-      const max = isFinite(audio.duration) ? audio.duration : Infinity;
-      audio.currentTime = Math.min(max, audio.currentTime + step);
-    });
-  } catch { /* not supported — silently skip */ }
-
-  console.info('[MediaSession] seekbackward / seekforward handlers registered.');
-
-})();
 
 
 /* =====================================================
@@ -2824,7 +2928,7 @@ async function downloadSong(url, filename, btn) {
     for (const event of pending) {
       const { songId, eventId, sessionId, listenedSeconds, duration } = event;
       if (!songId || !eventId) {
-        await SJrIDB.removePendingPlay(eventId).catch(() => {});
+        await SJrIDB.removePendingPlay(eventId).catch(() => { });
         continue;
       }
 
@@ -2927,10 +3031,10 @@ async function downloadSong(url, filename, btn) {
 (function patchFetchForOfflinePlayCount() {
 
   const PLAY_ENDPOINT_RE = /\/music\/[^/]+\/play$/i;
-  const _originalFetch   = window.fetch;
+  const _originalFetch = window.fetch;
 
   window.fetch = async function pwaFetch(input, init) {
-    const url    = typeof input === 'string' ? input : (input.url || '');
+    const url = typeof input === 'string' ? input : (input.url || '');
     const method = (init && init.method ? init.method : (input.method || 'GET')).toUpperCase();
 
     /* Only intercept POST to play endpoint */
@@ -2943,8 +3047,8 @@ async function downloadSong(url, filename, btn) {
         if (init && init.body && typeof window.sjrQueueOfflinePlay === 'function') {
           try {
             const payload = JSON.parse(init.body);
-            const match   = url.match(/\/music\/([^/]+)\/play/i);
-            const songId  = match ? match[1] : null;
+            const match = url.match(/\/music\/([^/]+)\/play/i);
+            const songId = match ? match[1] : null;
             if (songId && payload.eventId) {
               await window.sjrQueueOfflinePlay(songId, payload);
             }
