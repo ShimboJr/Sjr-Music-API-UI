@@ -857,6 +857,12 @@ function wireAudioAutoplay(audioNodes, songs = []) {
         navigator.mediaSession.playbackState = 'playing';
       }
 
+      /* ── Keep Android's MediaSession alive: stop heartbeat while playing
+         (not needed) and push initial position state immediately so the
+         lock-screen seek bar renders correctly from the first frame. ── */
+      _stopMediaSessionHeartbeat();
+      _syncPositionState(audio);
+
       /* Fresh-play resets */
       crossfadeTriggered = false;
       preloadScheduled = false;
@@ -882,9 +888,21 @@ function wireAudioAutoplay(audioNodes, songs = []) {
       if ('mediaSession' in navigator) {
         navigator.mediaSession.playbackState = 'paused';
       }
-      /* Capture the pair reference immediately — it may be cleared by 'ended'
-         before the setTimeout callback runs. */
+
+      /* ── Keep Android's MediaSession alive while paused ─────────────────
+         Android will kill a paused session after ~60 s.  Push position state
+         immediately so the lock-screen seek bar is accurate, then start the
+         30 s heartbeat that re-asserts the session before Android's timer
+         expires.  The heartbeat is cancelled as soon as playback resumes.
+         We only do this if the pause is a genuine user pause — not the
+         fading-out half of an active crossfade (that track will fire 'ended'
+         very shortly and naturally release the lock). ── */
       const pairAtPause = activeCrossfadePair;
+      if (!pairAtPause || pairAtPause.from !== audio) {
+        _syncPositionState(audio);
+        _startMediaSessionHeartbeat();
+      }
+
       setTimeout(() => {
         /* Don't steal the highlight from the incoming track mid-crossfade */
         if (pairAtPause && pairAtPause.from === audio) return;
@@ -912,6 +930,9 @@ function wireAudioAutoplay(audioNodes, songs = []) {
            fires 'ended' naturally when it reaches the end of the file.
     ──────────────────────────────────────────────── */
     audio.addEventListener('timeupdate', () => {
+      /* ── Keep lock-screen seek bar accurate while playing ── */
+      if (!audio.paused) _syncPositionState(audio);
+
       if (crossfadeTriggered) return;
       if (!audio.duration || !isFinite(audio.duration)) return;
 
@@ -957,6 +978,9 @@ function wireAudioAutoplay(audioNodes, songs = []) {
       if (activeCrossfadePair && activeCrossfadePair.from === audio) {
         activeCrossfadePair = null;
       }
+
+      /* Stop the heartbeat — a new one will start if the next track pauses */
+      _stopMediaSessionHeartbeat();
 
       if (crossfadeTriggered) return; /* crossfade handled the transition */
 
@@ -1041,6 +1065,81 @@ function scheduleNextPreload(currentAudio, idx, audioNodes, onScheduled) {
  * Reset to null whenever playback stops or a new queue is loaded.
  */
 let _lastMediaSessionSongKey = null;
+
+/**
+ * Interval ID for the MediaSession keep-alive heartbeat.
+ * While paused, Android will kill the MediaSession after ~60 s unless the
+ * session is periodically re-asserted.  This heartbeat fires every 30 s to
+ * refresh metadata + position + playbackState, resetting Android's timer.
+ * Cleared while playing (not needed) and on page unload.
+ */
+let _mediaSessionHeartbeatId = null;
+
+/** Start (or restart) the paused-session heartbeat. */
+function _startMediaSessionHeartbeat() {
+  _stopMediaSessionHeartbeat();
+  if (!('mediaSession' in navigator)) return;
+
+  _mediaSessionHeartbeatId = setInterval(() => {
+    if (!('mediaSession' in navigator)) return;
+    const audio = pbState.nodes[pbState.index];
+    const song = pbState.queue[pbState.index];
+
+    /* Only keep-alive while actually paused — stop if it somehow resumed */
+    if (audio && !audio.paused) { _stopMediaSessionHeartbeat(); return; }
+
+    /* Re-assert playbackState (most important — this resets Android's timer) */
+    navigator.mediaSession.playbackState = 'paused';
+
+    /* Re-assert metadata so the notification card doesn't go blank */
+    if (song) {
+      /* Force a re-push by temporarily clearing the dedup key */
+      _lastMediaSessionSongKey = null;
+      updateMediaSessionMeta(song);
+    }
+
+    /* Re-assert position so Android's lock-screen seek bar stays accurate */
+    if (audio && isFinite(audio.duration) && audio.duration > 0) {
+      try {
+        navigator.mediaSession.setPositionState({
+          duration: audio.duration,
+          playbackRate: audio.playbackRate || 1,
+          position: audio.currentTime,
+        });
+      } catch { /* not supported on this platform */ }
+    }
+
+    console.debug('[MediaSession] Heartbeat — session kept alive while paused.');
+  }, 30_000); /* 30 s — well within Android's ~60 s timeout */
+}
+
+/** Clear the paused-session heartbeat. */
+function _stopMediaSessionHeartbeat() {
+  if (_mediaSessionHeartbeatId !== null) {
+    clearInterval(_mediaSessionHeartbeatId);
+    _mediaSessionHeartbeatId = null;
+  }
+}
+
+/**
+ * Updates navigator.mediaSession.setPositionState() for the given audio node.
+ * Gives Android the seek position and duration so it keeps the session alive
+ * and renders an accurate lock-screen seek bar.
+ * Safe to call on platforms that don't support setPositionState.
+ *
+ * @param {HTMLAudioElement} audio
+ */
+function _syncPositionState(audio) {
+  if (!('mediaSession' in navigator) || !audio) return;
+  if (!isFinite(audio.duration) || audio.duration <= 0) return;
+  try {
+    navigator.mediaSession.setPositionState({
+      duration: audio.duration,
+      playbackRate: audio.playbackRate || 1,
+      position: Math.min(audio.currentTime, audio.duration),
+    });
+  } catch { /* setPositionState not supported — silently skip */ }
+}
 
 /**
  * Updates the OS / browser media notification card with title, artist,
@@ -1249,6 +1348,7 @@ function initMediaSession() {
   navigator.mediaSession.setActionHandler('stop', () => {
     const audio = pbState.nodes[pbState.index];
     if (audio) { audio.pause(); audio.currentTime = 0; }
+    _stopMediaSessionHeartbeat();
   });
 
   /* ── previoustrack — single source of truth ── */
@@ -1317,11 +1417,33 @@ function initMediaSession() {
   document.addEventListener('visibilitychange', () => {
     if (!('mediaSession' in navigator)) return;
     const audio = pbState.nodes[pbState.index];
+    const song = pbState.queue[pbState.index];
     if (!audio) return;
+
+    const isPaused = audio.paused;
 
     /* Re-assert the correct playbackState when the page becomes visible again
      * (handles the case where the OS reset it while hidden). */
-    navigator.mediaSession.playbackState = audio.paused ? 'paused' : 'playing';
+    navigator.mediaSession.playbackState = isPaused ? 'paused' : 'playing';
+
+    /* Re-push metadata — Android may have dropped the notification while hidden */
+    if (song) {
+      _lastMediaSessionSongKey = null; /* force re-push */
+      updateMediaSessionMeta(song);
+    }
+
+    /* Re-sync seek bar position */
+    _syncPositionState(audio);
+
+    /* If page became visible and audio is paused, restart heartbeat to stay alive.
+       If audio is playing, make sure heartbeat is off (not needed while playing). */
+    if (document.visibilityState === 'visible') {
+      if (isPaused) {
+        _startMediaSessionHeartbeat();
+      } else {
+        _stopMediaSessionHeartbeat();
+      }
+    }
 
     console.debug(
       '[MediaSession] visibilitychange →', document.visibilityState,
@@ -1339,16 +1461,36 @@ function initMediaSession() {
   window.addEventListener('freeze', () => {
     if (!('mediaSession' in navigator)) return;
     const audio = pbState.nodes[pbState.index];
+    const song = pbState.queue[pbState.index];
     /* Ensure playbackState is correct before the page is frozen */
     navigator.mediaSession.playbackState = (!audio || audio.paused) ? 'paused' : 'playing';
+    /* Push one last metadata + position refresh before the page freezes */
+    if (song) { _lastMediaSessionSongKey = null; updateMediaSessionMeta(song); }
+    if (audio) _syncPositionState(audio);
     console.debug('[MediaSession] Page freeze — playbackState:', navigator.mediaSession.playbackState);
   });
 
   window.addEventListener('resume', () => {
     if (!('mediaSession' in navigator)) return;
     const audio = pbState.nodes[pbState.index];
-    navigator.mediaSession.playbackState = (audio && !audio.paused) ? 'playing' : 'paused';
+    const song = pbState.queue[pbState.index];
+    const isPaused = !audio || audio.paused;
+    navigator.mediaSession.playbackState = isPaused ? 'paused' : 'playing';
+    /* Re-push everything on resume so the notification card is complete */
+    if (song) { _lastMediaSessionSongKey = null; updateMediaSessionMeta(song); }
+    if (audio) _syncPositionState(audio);
+    /* Restart heartbeat if still paused after thaw */
+    if (isPaused) _startMediaSessionHeartbeat();
+    else _stopMediaSessionHeartbeat();
     console.debug('[MediaSession] Page resume — playbackState re-synced to:', navigator.mediaSession.playbackState);
+  });
+
+  /* ── Cleanup on page unload ─────────────────────────────────────────────
+   * Clear the heartbeat interval if the user navigates away, so no orphaned
+   * intervals are left running in the background.
+   * ──────────────────────────────────────────────────────────────────────── */
+  window.addEventListener('pagehide', () => {
+    _stopMediaSessionHeartbeat();
   });
 
   console.info('[MediaSession] Initialised — isIOS:', isIOS);
