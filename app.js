@@ -2258,7 +2258,7 @@ async function downloadSong(url, filename, btn) {
 
    Tracks actual, seek-proof accumulated listening time for
    each song.  Sends POST /music/:id/play once the user has
-   genuinely heard ≥ 80 % of a song's duration.
+   genuinely heard ≥ 60 % of a song's duration.
 
    Design contract
    ───────────────
@@ -2684,7 +2684,7 @@ async function downloadSong(url, filename, btn) {
           !tracker.playCountRegistered &&
           isFinite(audio.duration) &&
           audio.duration > 0 &&
-          tracker.accumulatedListeningTime >= audio.duration * 0.80
+          tracker.accumulatedListeningTime >= audio.duration * 0.60
         ) {
           /* Lock BEFORE async call — prevents race with next tick */
           tracker.playCountRegistered = true;
