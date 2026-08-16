@@ -718,6 +718,14 @@ const CROSSFADE_DURATION = 5; /* seconds */
 let activeCrossfadePair = null;
 
 /**
+ * Sentinel: set to true by stopPlaybackAtEnd() while the 'pause' event
+ * handler's 50 ms timer is running.  Prevents the timer from clearing the
+ * now-playing highlight on the final song after the queue ends.
+ * Reset to false immediately after the timer fires.
+ */
+let _stoppingAtQueueEnd = false;
+
+/**
  * Registers a batch of <audio> nodes from one section into the global
  * registry and wires three behaviours:
  *
@@ -906,6 +914,13 @@ function wireAudioAutoplay(audioNodes, songs = []) {
       setTimeout(() => {
         /* Don't steal the highlight from the incoming track mid-crossfade */
         if (pairAtPause && pairAtPause.from === audio) return;
+
+        /* Don't clear if the queue stopped cleanly at the last song — we want
+           to keep the final card highlighted so the user knows where they are. */
+        if (_stoppingAtQueueEnd) {
+          _stoppingAtQueueEnd = false; /* reset after consuming */
+          return;
+        }
 
         /* Don't clear if another track is already playing (e.g. next song
            started playing before this pause event resolved) */
@@ -1194,8 +1209,17 @@ function playSongByIndex(idx) {
   const audio = pbState.nodes[idx];
 
   if (!audio) {
-    /* This slot has no audio preview — skip forward to the next song */
-    playSongByIndex(idx + 1);
+    /* This slot has no audio preview — skip forward to the next playable song.
+       If no playable slot exists beyond idx, stop cleanly at end of queue. */
+    let next = null;
+    for (let n = idx + 1; n < pbState.nodes.length; n++) {
+      if (pbState.nodes[n]) { next = n; break; }
+    }
+    if (next !== null) {
+      playSongByIndex(next);
+    } else {
+      stopPlaybackAtEnd();
+    }
     return;
   }
 
@@ -1224,12 +1248,46 @@ function playSongByIndex(idx) {
 }
 
 /**
+ * Stops playback cleanly when the final song in the queue finishes.
+ *
+ * - Pauses the current audio (it has already ended naturally, but we also call
+ *   this from Media Session Next when already on the last track).
+ * - Keeps the song card highlighted so the user knows where they were.
+ * - Sets MediaSession playbackState to "none" so the OS notification does not
+ *   show the song as still playing.
+ * - Stops the keep-alive heartbeat (no longer needed).
+ */
+function stopPlaybackAtEnd() {
+  const audio = pbState.nodes[pbState.index];
+
+  /* Tell the pause event's 50 ms timer to preserve the now-playing card */
+  _stoppingAtQueueEnd = true;
+
+  if (audio && !audio.paused) audio.pause();
+
+  _stopMediaSessionHeartbeat();
+
+  if ('mediaSession' in navigator) {
+    navigator.mediaSession.playbackState = 'none';
+  }
+
+  /* Safety net: clear the sentinel after 100 ms in case the browser did not
+     fire a 'pause' event (some browsers skip it when the track ended naturally
+     via the 'ended' event).  The pause handler consumes and clears the flag
+     in its own 50 ms timer; this ensures it never stays stale. */
+  setTimeout(() => { _stoppingAtQueueEnd = false; }, 100);
+
+  console.info('[Engine] End of queue — playback stopped (no loop).');
+}
+
+/**
  * Navigates to the next playable song in the current pbState queue.
  *
  * Behaviour:
  *  - Searches forward from the current index.
  *  - Skips null entries (songs without an audio preview URL).
- *  - Wraps from the last song back to the first so playback never stalls.
+ *  - If already at the last song, stops playback via stopPlaybackAtEnd()
+ *    rather than wrapping around to the first song.
  *
  * Used by: Media Session nexttrack, Bluetooth/headset next button,
  *          audio.ended fallback (natural song completion).
@@ -1242,10 +1300,8 @@ function playNextSong() {
     if (pbState.nodes[n]) { playSongByIndex(n); return; }
   }
 
-  /* Reached the end of the queue — wrap to the first playable song */
-  for (let n = 0; n <= pbState.index; n++) {
-    if (pbState.nodes[n]) { playSongByIndex(n); return; }
-  }
+  /* Reached the end of the queue — stop cleanly; do NOT wrap to the first song */
+  stopPlaybackAtEnd();
 }
 
 /**
@@ -1254,7 +1310,8 @@ function playNextSong() {
  * Behaviour (matches Spotify / Apple Music standard):
  *  - If the current song has played for MORE than 3 seconds → restart it.
  *  - Otherwise → navigate to the previous playable song.
- *  - If already at the first song → restart it.
+ *  - If already at the first song → seek to 0 but do NOT wrap to the last song
+ *    and do NOT restart if the song was paused at the end of the queue.
  *
  * Used by: Media Session previoustrack, Bluetooth/headset previous button.
  */
@@ -1266,7 +1323,10 @@ function playPreviousSong() {
   /* Standard '>3 s played → restart' behaviour (Spotify / Apple Music) */
   if (current && current.currentTime > 3) {
     current.currentTime = 0;
-    if (current.paused) {
+    /* Only resume if it was already playing — don't force-play a paused track */
+    if (!current.paused) {
+      /* Already playing — currentTime reset is sufficient */
+    } else {
       current.play().catch(err => console.warn('[Prev] play blocked:', err));
     }
     return;
@@ -1277,9 +1337,13 @@ function playPreviousSong() {
     if (pbState.nodes[n]) { playSongByIndex(n); return; }
   }
 
-  /* Already at the first song — restart it */
+  /* Already at the first song — seek to 0; do NOT wrap to the last song.
+     If the song is paused (e.g. user pressed Prev after the queue stopped at
+     the end and then pressed Prev to go back), restart it so they can hear it. */
   if (current) {
     current.currentTime = 0;
+    /* Resume only if it was already playing; if it was paused at end-of-queue,
+       start it so the user gets feedback that they are at the first song. */
     if (current.paused) {
       current.play().catch(err => console.warn('[Prev] play blocked:', err));
     }
