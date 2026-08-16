@@ -73,6 +73,21 @@ const pbState = {
   index: -1,
 };
 
+/* ── Playback Debug Mode ──────────────────────────────────────────────────
+ * Set PLAYBACK_DEBUG = true to enable verbose trace logs for every
+ * playback event: play, ended, crossfade, Media Session, queue changes.
+ * Set to false to suppress all verbose logs in production.
+ * ──────────────────────────────────────────────────────────────────────── */
+const PLAYBACK_DEBUG = true;
+
+/* ── Queue-finished sentinel ──────────────────────────────────────────────
+ * Set to true by stopPlaybackAtEnd() after the final song completes.
+ * Prevents any automatic queue advance from starting a new song.
+ * Reset to false by playSongByIndex() when the user manually starts playback
+ * (clicking a song, starting shuffle, opening favourites, new search etc.).
+ * ──────────────────────────────────────────────────────────────────────── */
+let playbackQueueFinished = false;
+
 
 /* ── Initialise ─────────────────────────────────── */
 window.addEventListener('DOMContentLoaded', () => {
@@ -743,10 +758,37 @@ let _stoppingAtQueueEnd = false;
  *     volume 0 and fades up to full — both ramps running in parallel via
  *     requestAnimationFrame with an ease-in-out curve.
  *
+ * ACTIVE-QUEUE GUARD:
+ *   Every event handler that can ADVANCE playback (crossfade, ended fallback)
+ *   checks that `audioNodes === pbState.nodes` before acting.  This is the
+ *   single definitive fix for the queue-restart bug:
+ *
+ *   When the user loads Search results, pbState.nodes is set to the search
+ *   audioNodes batch.  The Recently Released section's audioNodes are still in
+ *   globalAudioRegistry and still have their event listeners attached.  Without
+ *   this guard, a timeupdate on a recently-released audio node could trigger a
+ *   crossfade into the NEXT recently-released song — calling nextAudio.play(),
+ *   which fires the 'play' handler, which overwrites pbState.nodes with the
+ *   recently-released batch.  Now playNextSong() navigates within recently-
+ *   released instead of the search queue, and the queue appears to "restart".
+ *
+ *   The guard `audioNodes !== pbState.nodes` detects this scenario and aborts
+ *   any automatic advance from a stale / background section.
+ *
  * @param {(HTMLAudioElement|null)[]} audioNodes  Ordered array for one section
  *        (null entries for songs without a preview URL)
+ * @param {object[]}                  songs       Song data objects (parallel)
  */
 function wireAudioAutoplay(audioNodes, songs = []) {
+
+  if (PLAYBACK_DEBUG) {
+    console.debug('[Queue] wireAudioAutoplay called', {
+      batchSize: audioNodes.length,
+      validNodes: audioNodes.filter(Boolean).length,
+      firstSong: songs[0]?.title,
+      lastSong: songs[songs.length - 1]?.title,
+    });
+  }
 
   /* Prune any nodes that are no longer attached to the document */
   for (const node of globalAudioRegistry) {
@@ -833,10 +875,40 @@ function wireAudioAutoplay(audioNodes, songs = []) {
          Exception: if a crossfade is active and the other track is the
          fading-out half (activeCrossfadePair.from), it must NOT be paused —
          it still needs to play out its final seconds while fading to silence.
+       • Updates pbState ONLY for the active queue batch.
        • Resets per-play state.
        • Schedules deferred preload of the next track.
+
+       ACTIVE-QUEUE GUARD on pbState update:
+         We only overwrite pbState.queue / pbState.nodes / pbState.index
+         when this audio node is being played as part of the currently active
+         queue (pbState.nodes === audioNodes), OR when pbState.nodes is empty
+         (first play ever), OR when the user explicitly started this audio
+         while playback was idle.
+
+         This prevents a background section's 'play' event (e.g., Recently
+         Released crossfade continuing) from silently hijacking pbState and
+         redirecting playNextSong() into the wrong queue.
     ──────────────────────────────────────────────── */
     audio.addEventListener('play', () => {
+      if (PLAYBACK_DEBUG) {
+        console.debug('[Playback] play event fired', {
+          action: 'play',
+          title: songs[idx]?.title,
+          songId: songs[idx]?.id ?? songs[idx]?._id,
+          batchIndex: idx,
+          queueLength: audioNodes.length,
+          pbStateIndex: pbState.index,
+          pbStateQueueLength: pbState.nodes.length,
+          isActiveBatch: audioNodes === pbState.nodes,
+          currentTime: audio.currentTime,
+          duration: audio.duration,
+          paused: audio.paused,
+          ended: audio.ended,
+          src: audio.querySelector?.('source')?.src,
+        });
+      }
+
       for (const other of globalAudioRegistry) {
         if (other === audio) continue;
         if (other.paused) continue;
@@ -851,15 +923,40 @@ function wireAudioAutoplay(audioNodes, songs = []) {
 
       setNowPlaying(cardIndex);
 
-      /* ── Sync central playback state so Media Session / Bluetooth always
-         know which queue and position are current.
-         Setting these inside the 'play' event means crossfade auto-advances
-         also keep pbState in sync automatically — the crossfade engine calls
-         nextAudio.play(), which fires this same handler with the correct idx,
-         so no extra synchronisation code is needed anywhere else. ── */
-      pbState.queue = songs;
-      pbState.nodes = audioNodes;
-      pbState.index = idx;
+      /* ── Sync central playback state ─────────────────────────────────
+         Only update pbState when this batch IS the active queue, or when
+         pbState is unset (first-ever play) or when this batch became active
+         via a user action (playSongByIndex sets pbState.nodes before calling
+         audio.play(), so audioNodes === pbState.nodes is already true there).
+
+         If this batch is NOT the active queue (e.g. a crossfade from the
+         Recently Released section continued into its second song while the
+         user is listening to Search results), we do NOT overwrite pbState.
+         This is the primary fix for the queue-restart bug.
+      ── */
+      if (audioNodes === pbState.nodes || pbState.nodes.length === 0) {
+        pbState.queue = songs;
+        pbState.nodes = audioNodes;
+        pbState.index = idx;
+
+        if (PLAYBACK_DEBUG) {
+          console.debug('[Queue] pbState updated (active batch)', {
+            title: songs[idx]?.title,
+            index: idx,
+            queueLength: audioNodes.length,
+          });
+        }
+      } else {
+        /* Background / stale batch fired play — do NOT hijack pbState */
+        if (PLAYBACK_DEBUG) {
+          console.warn('[Queue] IGNORED pbState update — this batch is NOT the active queue', {
+            firingTitle: songs[idx]?.title,
+            activeBatchFirstSong: pbState.queue[0]?.title,
+            activeBatchLength: pbState.nodes.length,
+          });
+        }
+      }
+
       updateMediaSessionMeta(songs[idx]);
       if ('mediaSession' in navigator) {
         navigator.mediaSession.playbackState = 'playing';
@@ -936,13 +1033,25 @@ function wireAudioAutoplay(audioNodes, songs = []) {
        'timeupdate' event — Spotify-style crossfade
        Fires many times per second; we only act once per play-through.
 
-       When ≤ CROSSFADE_DURATION seconds remain:
-         • Mark activeCrossfadePair so the 'play' enforcer on the next
-           track won't kill this track.
-         • Start the next track at volume 0.
-         • Ramp this track 1→0 and next track 0→1 simultaneously.
-         • This track KEEPS PLAYING — it fades to silence and the browser
-           fires 'ended' naturally when it reaches the end of the file.
+       ACTIVE-QUEUE GUARD:
+         Before starting a crossfade, verify that this batch (audioNodes)
+         is still the active queue (audioNodes === pbState.nodes).
+         If the user has since loaded a different queue (Search results
+         replaced by Shuffle, or Recently Released is background), this
+         batch must NOT advance playback — that is for the active batch only.
+
+         Without this guard, a background section's timeupdate could:
+           1. Find a nextAudio in its own batch.
+           2. Call nextAudio.play().
+           3. Fire the 'play' handler, which (without the pbState guard above)
+              would overwrite pbState with this background batch's data.
+           4. playNextSong() would then navigate within the wrong queue.
+           5. After the last song in that batch, playNextSong() falls through
+              to stopPlaybackAtEnd() — but then the ORIGINAL active queue's
+              last song 'ended' event ALSO fires playNextSong(), which now
+              sees pbState pointing to a different batch at an arbitrary index,
+              potentially wrapping back to index 0.
+
     ──────────────────────────────────────────────── */
     audio.addEventListener('timeupdate', () => {
       /* ── Keep lock-screen seek bar accurate while playing ── */
@@ -954,16 +1063,72 @@ function wireAudioAutoplay(audioNodes, songs = []) {
       const remaining = audio.duration - audio.currentTime;
       if (remaining > CROSSFADE_DURATION) return;
 
+      /* ── ACTIVE-QUEUE GUARD ──────────────────────────────────────────
+         Only fire a crossfade if this batch is the currently active queue.
+         A background section (Recently Released, old search) must NOT
+         trigger a crossfade — that would replace the active queue.
+      ──────────────────────────────────────────────────────────────── */
+      if (audioNodes !== pbState.nodes) {
+        /* This batch is no longer the active queue — suppress crossfade. */
+        crossfadeTriggered = true; /* mark so we don't keep checking */
+        if (PLAYBACK_DEBUG) {
+          console.debug('[Crossfade] SUPPRESSED — batch is not the active queue', {
+            title: songs[idx]?.title,
+            remaining: remaining.toFixed(2),
+            activeBatchFirstSong: pbState.queue[0]?.title,
+          });
+        }
+        return;
+      }
+
+      /* ── playbackQueueFinished guard ─────────────────────────────────
+         If the queue has been explicitly finished (final song completed),
+         do not start another crossfade.
+      ──────────────────────────────────────────────────────────────── */
+      if (playbackQueueFinished) {
+        crossfadeTriggered = true;
+        if (PLAYBACK_DEBUG) {
+          console.debug('[Crossfade] SUPPRESSED — playbackQueueFinished is true', {
+            title: songs[idx]?.title,
+          });
+        }
+        return;
+      }
+
       /* Find next playable track */
       let nextAudio = null;
+      let nextIdx = -1;
       for (let n = idx + 1; n < audioNodes.length; n++) {
-        if (audioNodes[n]) { nextAudio = audioNodes[n]; break; }
+        if (audioNodes[n]) { nextAudio = audioNodes[n]; nextIdx = n; break; }
       }
-      if (!nextAudio) return; /* last track — let it finish naturally */
+
+      /* ── Final track guard ───────────────────────────────────────────
+         No next track exists — this IS the final song.
+         Let it finish naturally; do NOT crossfade or restart.
+      ──────────────────────────────────────────────────────────────── */
+      if (!nextAudio) {
+        if (PLAYBACK_DEBUG) {
+          console.debug('[Crossfade] Final track — no crossfade', {
+            title: songs[idx]?.title,
+            remaining: remaining.toFixed(2),
+            queueLength: audioNodes.length,
+          });
+        }
+        return; /* last track — let it finish naturally */
+      }
 
       crossfadeTriggered = true;
 
       const fadeDurationMs = remaining * 1000;
+
+      if (PLAYBACK_DEBUG) {
+        console.debug('[Crossfade] Starting crossfade', {
+          from: songs[idx]?.title,
+          to: songs[nextIdx]?.title,
+          remaining: remaining.toFixed(2),
+          fadeDurationMs,
+        });
+      }
 
       /* Register the pair BEFORE calling nextAudio.play() */
       activeCrossfadePair = { from: audio, to: nextAudio };
@@ -987,17 +1152,72 @@ function wireAudioAutoplay(audioNodes, songs = []) {
        • Clears activeCrossfadePair when the fading-out track finishes.
        • Fallback auto-advance if crossfade never fired (short clip / seek
          to end / browser didn't know duration until it was too late).
+
+       ACTIVE-QUEUE GUARD:
+         Only call playNextSong() if this batch is still the active queue.
+         A background section's 'ended' event must NOT advance the active
+         queue — it has nothing to do with it.
     ──────────────────────────────────────────────── */
     audio.addEventListener('ended', () => {
+      if (PLAYBACK_DEBUG) {
+        console.debug('[Playback] ended event fired', {
+          action: 'ended',
+          title: songs[idx]?.title,
+          songId: songs[idx]?.id ?? songs[idx]?._id,
+          batchIndex: idx,
+          queueLength: audioNodes.length,
+          pbStateIndex: pbState.index,
+          isActiveBatch: audioNodes === pbState.nodes,
+          crossfadeTriggered,
+          currentTime: audio.currentTime,
+          duration: audio.duration,
+        });
+      }
+
       /* Release the crossfade lock so normal enforcement resumes */
       if (activeCrossfadePair && activeCrossfadePair.from === audio) {
         activeCrossfadePair = null;
+
+        if (PLAYBACK_DEBUG) {
+          console.debug('[Crossfade] Crossfade pair cleared (fading-out track ended)', {
+            title: songs[idx]?.title,
+          });
+        }
       }
 
       /* Stop the heartbeat — a new one will start if the next track pauses */
       _stopMediaSessionHeartbeat();
 
-      if (crossfadeTriggered) return; /* crossfade handled the transition */
+      if (crossfadeTriggered) {
+        if (PLAYBACK_DEBUG) {
+          console.debug('[Playback] ended — crossfade already handled transition, skipping playNextSong()');
+        }
+        return; /* crossfade handled the transition */
+      }
+
+      /* ── ACTIVE-QUEUE GUARD ──────────────────────────────────────────
+         Only advance the queue if this batch is the active one.
+         If this batch has been superseded (user loaded Search after
+         Recently Released was playing), its 'ended' event must NOT call
+         playNextSong() — that would navigate within the wrong queue.
+      ──────────────────────────────────────────────────────────────── */
+      if (audioNodes !== pbState.nodes) {
+        if (PLAYBACK_DEBUG) {
+          console.warn('[Playback] ended — IGNORED (batch is not active queue)', {
+            title: songs[idx]?.title,
+            activeBatchFirstSong: pbState.queue[0]?.title,
+          });
+        }
+        return;
+      }
+
+      if (PLAYBACK_DEBUG) {
+        console.debug('[Playback] ended — calling playNextSong()', {
+          title: songs[idx]?.title,
+          nextIndex: pbState.index + 1,
+          queueLength: pbState.nodes.length,
+        });
+      }
 
       /* Fallback: delegate to the central playback engine.
          This is the key unification point — "song ends naturally" and
@@ -1223,6 +1443,22 @@ function playSongByIndex(idx) {
     return;
   }
 
+  /* ── User-initiated playback: reset the queue-finished flag ─────────────
+     playSongByIndex is called when the user explicitly selects a song,
+     or when playNextSong / playPreviousSong advances the queue naturally.
+     In both cases the queue is active so we clear the finished sentinel.
+  ──────────────────────────────────────────────────────────────────────── */
+  playbackQueueFinished = false;
+
+  if (PLAYBACK_DEBUG) {
+    console.debug('[Playback] playSongByIndex()', {
+      idx,
+      title: pbState.queue[idx]?.title,
+      queueLength: pbState.nodes.length,
+      playbackQueueFinished,
+    });
+  }
+
   /* Reset crossfade sentinel so the global enforcer works normally */
   activeCrossfadePair = null;
 
@@ -1260,6 +1496,16 @@ function playSongByIndex(idx) {
 function stopPlaybackAtEnd() {
   const audio = pbState.nodes[pbState.index];
 
+  /* ── Mark queue as finished ───────────────────────────────────────────────
+     Set BEFORE pausing so that the 'pause' event's side-effects see the
+     correct state.  This sentinel blocks any automatic playback advance until
+     the user explicitly starts a new song / shuffle / search.
+  ──────────────────────────────────────────────────────────────────────── */
+  playbackQueueFinished = true;
+
+  /* Clear crossfade state — the queue is done */
+  activeCrossfadePair = null;
+
   /* Tell the pause event's 50 ms timer to preserve the now-playing card */
   _stoppingAtQueueEnd = true;
 
@@ -1276,6 +1522,15 @@ function stopPlaybackAtEnd() {
      via the 'ended' event).  The pause handler consumes and clears the flag
      in its own 50 ms timer; this ensures it never stays stale. */
   setTimeout(() => { _stoppingAtQueueEnd = false; }, 100);
+
+  if (PLAYBACK_DEBUG) {
+    console.debug('[Playback] stopPlaybackAtEnd()', {
+      title: pbState.queue[pbState.index]?.title,
+      index: pbState.index,
+      queueLength: pbState.nodes.length,
+      playbackQueueFinished,
+    });
+  }
 
   console.info('[Engine] End of queue — playback stopped (no loop).');
 }
@@ -1294,6 +1549,26 @@ function stopPlaybackAtEnd() {
  */
 function playNextSong() {
   if (pbState.nodes.length === 0) return;
+
+  /* ── playbackQueueFinished guard ─────────────────────────────────────────
+     If the queue was already stopped at the end, do not automatically
+     restart it.  This guard is for automatic advances only — user-initiated
+     play (clicking a song) resets playbackQueueFinished via playSongByIndex.
+  ──────────────────────────────────────────────────────────────────────── */
+  if (playbackQueueFinished) {
+    if (PLAYBACK_DEBUG) {
+      console.debug('[Playback] playNextSong() — suppressed (playbackQueueFinished is true)');
+    }
+    return;
+  }
+
+  if (PLAYBACK_DEBUG) {
+    console.debug('[Playback] playNextSong()', {
+      currentIndex: pbState.index,
+      queueLength: pbState.nodes.length,
+      currentTitle: pbState.queue[pbState.index]?.title,
+    });
+  }
 
   /* Scan forward from current position */
   for (let n = pbState.index + 1; n < pbState.nodes.length; n++) {
@@ -1417,11 +1692,29 @@ function initMediaSession() {
 
   /* ── previoustrack — single source of truth ── */
   navigator.mediaSession.setActionHandler('previoustrack', () => {
+    if (PLAYBACK_DEBUG) {
+      console.debug('[MediaSession] previoustrack triggered', {
+        currentIndex: pbState.index,
+        queueLength: pbState.nodes.length,
+        currentTitle: pbState.queue[pbState.index]?.title,
+      });
+    }
+    /* Previous always works — user can go back even after queue ends */
     playPreviousSong();
   });
 
   /* ── nexttrack — single source of truth ── */
   navigator.mediaSession.setActionHandler('nexttrack', () => {
+    if (PLAYBACK_DEBUG) {
+      console.debug('[MediaSession] nexttrack triggered', {
+        currentIndex: pbState.index,
+        queueLength: pbState.nodes.length,
+        currentTitle: pbState.queue[pbState.index]?.title,
+        playbackQueueFinished,
+      });
+    }
+    /* If already at end, do nothing — do NOT wrap to first song */
+    if (playbackQueueFinished) return;
     playNextSong();
   });
 
