@@ -3109,7 +3109,7 @@ async function downloadSong(url, filename, btn) {
       and queues them via SJrIDB.addPendingPlay().
    2. Sync runner — on window 'online' and on page load,
       drains the queue by POSTing to the backend.
-   ===================================================== */
+   ==================================================== */
 
 (function initOfflinePlaySync() {
 
