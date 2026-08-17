@@ -3198,7 +3198,7 @@ async function downloadSong(url, filename, btn) {
 })(); /* end initPlayTracker */
 
 
-/* ====================================================
+/* =====================================================
    SERVICE WORKER REGISTRATION  (PWA)
 
    Registers sw.js from the app's own origin.
