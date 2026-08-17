@@ -1,40 +1,68 @@
 /* =====================================================
    SJrMusic – sw.js  (Service Worker)
 
-   Cache name versioning:
-     Increment CACHE_NAME when app shell assets change.
-     The activate handler auto-purges all older caches.
+   ── HOW TO UPDATE ─────────────────────────────────
+   When deploying a new version of SJrMusic, increment
+   CACHE_VERSION (e.g. v2 → v3) AND update
+   SJR_BUILD_VERSION to match.
 
-   Strategies:
-     App shell (HTML/CSS/JS)   → Cache First (pre-cached at install)
-     CDN assets (Bootstrap)    → Cache First (pre-cached at install)
-     Google Fonts CSS          → Stale While Revalidate
-     Cover art images          → Cache First (on demand, size-limited)
-     GET /music catalogue      → Network First → Cache fallback
-     POST /music/:id/play      → NEVER cached — always network passthrough
-     Audio stream URLs         → NEVER cached — passthrough (no SW interference)
-     CORS proxy URLs           → NEVER cached — passthrough
+   The activate handler automatically purges all older
+   sjrmusic-* caches. Users receive the update without
+   any manual cache clearing.
 
-   Security:
-     • No backend credentials cached
-     • No Supabase secret keys
-     • POST requests always bypass cache
-     • Audio/media streams bypass cache completely
+   ── CACHE STRATEGIES ──────────────────────────────
+   Updatable app shell (HTML/JS/CSS) → Network First
+     Try network; if offline, fall back to cache.
+     Ensures users always get fresh files after deploy.
+
+   Static assets (icons)             → Cache First
+     Rarely change; long-lived cache is fine.
+
+   CDN assets (Bootstrap)            → Cache First
+     Versioned URLs — safe to cache indefinitely.
+
+   Google Fonts CSS                  → Stale While Revalidate
+   Google Fonts files                → Cache First
+
+   GET /music catalogue              → Network First → Cache fallback
+   POST /music/:id/play              → NEVER cached — always network
+   Audio stream URLs                 → NEVER cached — passthrough
+   CORS proxy URLs                   → NEVER cached — passthrough
+
+   ── SECURITY ──────────────────────────────────────
+   • No backend credentials cached
+   • No Supabase secret keys
+   • POST requests always bypass cache
+   • Audio/media streams bypass cache completely
    ===================================================== */
 
-const CACHE_NAME       = 'sjrmusic-v1';
-const API_CACHE_NAME   = 'sjrmusic-api-v1';
-const IMAGE_CACHE_NAME = 'sjrmusic-img-v1';
+/* ── Build identity — change both on every deploy ── */
+const SJR_BUILD_VERSION = '2026-08-17-v2';
+console.log('[SW] SJrMusic Build:', SJR_BUILD_VERSION);
 
-/* ── App shell — pre-cached at install time ─── */
-const APP_SHELL = [
+/* ── Cache version — INCREMENT this on every deploy ── */
+const CACHE_VERSION = 'v2';
+const CACHE_NAME = `sjrmusic-${CACHE_VERSION}`;
+const API_CACHE_NAME = `sjrmusic-api-${CACHE_VERSION}`;
+const IMAGE_CACHE_NAME = `sjrmusic-img-${CACHE_VERSION}`;
+
+/* ── Updatable app shell files ────────────────────────
+   These use Network-First so they are always refreshed
+   on deploy. Served from cache only when offline.      */
+const APP_SHELL_UPDATABLE = new Set([
   '/',
   '/index.html',
-  '/style.css',
   '/app.js',
   '/idb.js',
   '/offline.html',
   '/manifest.json',
+  '/style.css',
+]);
+
+/* ── Static app shell — pre-cached at install time ───
+   Icons / images that rarely change.
+   Cache-First is fine for these.                      */
+const APP_SHELL_STATIC = [
   '/icons/icon-192.png',
   '/icons/icon-512.png',
   '/icons/apple-touch-icon.png',
@@ -67,23 +95,33 @@ const BYPASS_PATTERNS = [
 /* ── API origin ── */
 const API_ORIGIN = 'sjr-music-api-gold.vercel.app';
 
+/* ── Safe cache prefix — only delete OUR caches ── */
+const SJR_CACHE_PREFIX = 'sjrmusic-';
+
 /* ─────────────────────────────────────────────────────
    INSTALL — pre-cache the application shell
    ───────────────────────────────────────────────────── */
 self.addEventListener('install', (event) => {
-  console.info('[SW] Installing — cache name:', CACHE_NAME);
+  console.info('[SW] Installing — cache:', CACHE_NAME, '| build:', SJR_BUILD_VERSION);
 
   event.waitUntil(
     (async () => {
       const cache = await caches.open(CACHE_NAME);
 
-      /* Cache app shell (must-have) */
+      /* Pre-cache updatable app shell files.
+         We fetch them network-first at install so the cache is
+         pre-populated with the latest version from this deploy. */
+      const allShellFiles = [
+        ...APP_SHELL_UPDATABLE,
+        ...APP_SHELL_STATIC,
+      ];
+
       try {
-        await cache.addAll(APP_SHELL);
+        await cache.addAll(allShellFiles);
         console.info('[SW] App shell cached successfully.');
       } catch (err) {
         console.error('[SW] App shell cache failed:', err);
-        /* Non-fatal — proceed even if one shell asset fails */
+        /* Non-fatal — SW proceeds even if one asset fails */
       }
 
       /* Cache CDN assets (best-effort — don't block install if CDN is down) */
@@ -95,7 +133,9 @@ self.addEventListener('install', (event) => {
         }
       }
 
-      /* skipWaiting so the new SW takes control immediately */
+      /* skipWaiting — new SW takes control immediately on install.
+         Combined with clients.claim() in activate, this ensures
+         users get fresh files as soon as the SW is installed.    */
       await self.skipWaiting();
       console.info('[SW] Install complete — skipWaiting done.');
     })()
@@ -103,29 +143,43 @@ self.addEventListener('install', (event) => {
 });
 
 /* ─────────────────────────────────────────────────────
-   ACTIVATE — delete old cache versions
+   ACTIVATE — delete old SJrMusic cache versions only
    ───────────────────────────────────────────────────── */
 self.addEventListener('activate', (event) => {
-  console.info('[SW] Activating…');
+  console.info('[SW] Activating…', CACHE_NAME);
 
   event.waitUntil(
     (async () => {
-      /* Delete any cache that doesn't match our current named caches */
       const validCaches = new Set([CACHE_NAME, API_CACHE_NAME, IMAGE_CACHE_NAME]);
       const existingKeys = await caches.keys();
 
-      await Promise.all(
-        existingKeys
-          .filter(key => !validCaches.has(key))
-          .map(key => {
-            console.info('[SW] Deleting obsolete cache:', key);
-            return caches.delete(key);
-          })
+      /* IMPORTANT: Only delete caches that belong to SJrMusic
+         (prefix: 'sjrmusic-'). Never touch caches owned by
+         other applications on the same origin.               */
+      const toDelete = existingKeys.filter(key =>
+        key.startsWith(SJR_CACHE_PREFIX) && !validCaches.has(key)
       );
+
+      if (toDelete.length > 0) {
+        console.info('[SW] Deleting obsolete SJrMusic caches:', toDelete);
+        await Promise.all(toDelete.map(key => caches.delete(key)));
+      } else {
+        console.info('[SW] No obsolete caches to delete.');
+      }
 
       /* Take control of all open clients immediately */
       await self.clients.claim();
-      console.info('[SW] Activated — controlling all clients.');
+      console.info('[SW] Activated — controlling all clients. Build:', SJR_BUILD_VERSION);
+
+      /* Notify all open clients that the SW has updated */
+      const clients = await self.clients.matchAll({ type: 'window' });
+      clients.forEach(client => {
+        client.postMessage({
+          type: 'SW_ACTIVATED',
+          cacheName: CACHE_NAME,
+          buildVersion: SJR_BUILD_VERSION,
+        });
+      });
     })()
   );
 });
@@ -181,8 +235,19 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  /* ── App shell (same-origin HTML/CSS/JS) → Cache First ── */
+  /* ── Same-origin requests ── */
   if (url.origin === self.location.origin) {
+    const pathname = url.pathname;
+
+    /* Updatable app shell files → Network First
+       These are HTML, JS, CSS, manifest — must always
+       be refreshed when online so users get new deploys. */
+    if (APP_SHELL_UPDATABLE.has(pathname)) {
+      event.respondWith(networkFirstAppShell(request));
+      return;
+    }
+
+    /* Static assets (icons, images) → Cache First */
     event.respondWith(cacheFirstWithOfflineFallback(request));
     return;
   }
@@ -190,6 +255,52 @@ self.addEventListener('fetch', (event) => {
   /* ── Everything else → Network only ── */
   /* (External resources we don't control) */
 });
+
+/* ─────────────────────────────────────────────────────
+   STRATEGY: Network First (App Shell)
+   Used for HTML, JS, CSS, manifest.json.
+   Tries network first to always get the latest version.
+   Falls back to cache when offline.
+   Stores successful responses in the app shell cache.
+   ───────────────────────────────────────────────────── */
+async function networkFirstAppShell(request) {
+  const cache = await caches.open(CACHE_NAME);
+
+  try {
+    /* Always fetch from network — no-cache pragma prevents
+       the browser's HTTP cache from serving a stale response */
+    const response = await fetch(request, { cache: 'no-cache' });
+
+    if (response.ok) {
+      /* Update the SW cache with the fresh response */
+      cache.put(request, response.clone());
+      return response;
+    }
+
+    /* Server error — fall back to cache */
+    throw new Error(`Server returned ${response.status}`);
+
+  } catch (err) {
+    /* Network unavailable — serve cached version */
+    const cached = await cache.match(request);
+    if (cached) {
+      console.info('[SW] App shell offline fallback:', request.url);
+      return cached;
+    }
+
+    /* No cache and no network — serve offline page for navigations */
+    if (request.mode === 'navigate') {
+      const offlinePage = await cache.match('/offline.html');
+      if (offlinePage) return offlinePage;
+    }
+
+    /* Ultimate fallback */
+    return new Response(
+      '<html><body><h1>Offline</h1><p>Please check your connection and try again.</p></body></html>',
+      { headers: { 'Content-Type': 'text/html' } }
+    );
+  }
+}
 
 /* ─────────────────────────────────────────────────────
    STRATEGY: Cache First
@@ -216,7 +327,7 @@ async function cacheFirst(request, cacheName) {
 
 /* ─────────────────────────────────────────────────────
    STRATEGY: Cache First with Offline Fallback
-   For same-origin app shell pages.
+   For same-origin static assets (icons/images).
    If both cache and network fail, serve offline.html.
    ───────────────────────────────────────────────────── */
 async function cacheFirstWithOfflineFallback(request) {
@@ -336,10 +447,10 @@ async function cacheFirstImage(request) {
     /* Return a transparent 1×1 pixel PNG as placeholder */
     return new Response(
       new Uint8Array([
-        137,80,78,71,13,10,26,10,0,0,0,13,73,72,68,82,0,0,0,1,
-        0,0,0,1,8,6,0,0,0,31,21,196,137,0,0,0,11,73,68,65,84,
-        8,215,99,96,96,96,96,0,0,0,5,0,1,90,197,74,89,0,0,0,0,73,
-        69,78,68,174,66,96,130
+        137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1,
+        0, 0, 0, 1, 8, 6, 0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 11, 73, 68, 65, 84,
+        8, 215, 99, 96, 96, 96, 96, 0, 0, 0, 5, 0, 1, 90, 197, 74, 89, 0, 0, 0, 0, 73,
+        69, 78, 68, 174, 66, 96, 130
       ]),
       { headers: { 'Content-Type': 'image/png' } }
     );
@@ -349,9 +460,9 @@ async function cacheFirstImage(request) {
 /* ─────────────────────────────────────────────────────
    MESSAGE HANDLER
    Allows the main app to communicate with the SW.
-   Currently supports:
-     • { type: 'SKIP_WAITING' }  — force update
-     • { type: 'GET_VERSION' }   — returns cache name
+   Supports:
+     • { type: 'SKIP_WAITING' }  — force update (from toast Reload button)
+     • { type: 'GET_VERSION' }   — returns cache name + build version
    ───────────────────────────────────────────────────── */
 self.addEventListener('message', (event) => {
   if (!event.data) return;
@@ -367,10 +478,12 @@ self.addEventListener('message', (event) => {
         type: 'SW_VERSION',
         cacheName: CACHE_NAME,
         apiCacheName: API_CACHE_NAME,
+        buildVersion: SJR_BUILD_VERSION,
+        cacheVersion: CACHE_VERSION,
       });
       break;
 
     default:
-      /* Unknown message — ignore */
+    /* Unknown message — ignore */
   }
 });

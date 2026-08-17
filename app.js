@@ -4,6 +4,13 @@
    search / filter / card-display logic.
    ===================================================== */
 
+/* ── Build version — update this on every deploy ─────
+   Matches the SJR_BUILD_VERSION in sw.js.
+   Visible in the browser console to confirm which
+   version Vercel is currently serving.               */
+const SJR_BUILD_VERSION = '2026-08-17-v2';
+console.log('SJrMusic Build:', SJR_BUILD_VERSION);
+
 const API_URL = 'https://sjr-music-api-gold.vercel.app/music';
 
 /* CORS proxies — only used as fallback if direct fetch fails */
@@ -3201,10 +3208,12 @@ async function downloadSong(url, filename, btn) {
    Design:
    • Progressive enhancement — no-ops silently on
      browsers that don't support service workers.
-   • Shows a toast so the user can choose when to
+   • Shows a toast so the user can CHOOSE when to
      reload (prevents mid-session disruption).
-   • sw.js itself calls skipWaiting() during install
-     so fresh installs activate immediately.
+   • Does NOT auto-reload on controllerchange — that
+     would interrupt a playing song.
+   • Checks for updates on startup + every 30 minutes
+     so long-lived tabs always detect new deploys.
    ===================================================== */
 
 (function initServiceWorker() {
@@ -3216,8 +3225,10 @@ async function downloadSong(url, filename, btn) {
 
   let updateToast = null;
   let pendingRegistration = null;
+  let toastShown = false;
 
-  function buildUpdateToast() {
+  /* ── Build update toast ──────────────────────────── */
+  function buildUpdateToast(buildVersion) {
     if (updateToast) return updateToast;
 
     updateToast = document.createElement('div');
@@ -3226,14 +3237,15 @@ async function downloadSong(url, filename, btn) {
     updateToast.setAttribute('aria-live', 'polite');
     updateToast.innerHTML = `
       <div class="pwa-update-toast-text">
-        <strong>SJrMusic updated!</strong><br>
-        A new version is ready.
+        <strong>SJrMusic has been updated!</strong><br>
+        A new version is ready — refresh to get the latest.
       </div>
-      <button class="btn-pwa-update" id="pwaUpdateBtn">Reload</button>`;
+      <button class="btn-pwa-update" id="pwaUpdateBtn">Refresh</button>`;
 
     document.body.appendChild(updateToast);
 
     document.getElementById('pwaUpdateBtn').addEventListener('click', () => {
+      /* Tell the waiting SW to skip waiting, then reload */
       if (pendingRegistration && pendingRegistration.waiting) {
         pendingRegistration.waiting.postMessage({ type: 'SKIP_WAITING' });
       }
@@ -3243,54 +3255,105 @@ async function downloadSong(url, filename, btn) {
     return updateToast;
   }
 
-  function showUpdateToast(registration) {
+  function showUpdateToast(registration, buildVersion) {
+    if (toastShown) return; /* only show once per page load */
+    toastShown = true;
     pendingRegistration = registration;
-    const toast = buildUpdateToast();
+    const toast = buildUpdateToast(buildVersion);
     setTimeout(() => toast.classList.add('pwa-toast-visible'), 800);
     console.info('[SW] Update available — showing reload toast.');
   }
 
+  /* ── Track a newly installing SW ────────────────── */
   function trackInstalling(registration) {
     const installing = registration.installing;
     if (!installing) return;
 
     installing.addEventListener('statechange', () => {
+      /* 'installed' + existing controller = update ready for user */
       if (installing.state === 'installed' && navigator.serviceWorker.controller) {
         showUpdateToast(registration);
       }
     });
   }
 
+  /* ── Register sw.js ─────────────────────────────── */
   navigator.serviceWorker.register('/sw.js', { scope: '/' })
     .then(registration => {
       console.info('[SW] Registered — scope:', registration.scope);
+      console.log('SJrMusic Service Worker:', registration);
 
+      /* An SW is already waiting (e.g., user had tab open across deploy) */
       if (registration.waiting && navigator.serviceWorker.controller) {
         showUpdateToast(registration);
       }
 
       trackInstalling(registration);
 
+      /* New SW found (update discovered) */
       registration.addEventListener('updatefound', () => {
         trackInstalling(registration);
       });
 
-      let initialController = navigator.serviceWorker.controller;
+      /* ── Periodic update check ────────────────────────
+         Force the browser to check sw.js for changes:
+           • Once immediately after registration
+           • Every 30 minutes while the tab stays open
+
+         Without this, the browser only re-fetches sw.js
+         on navigation. Long-lived tabs never detect new
+         deploys. registration.update() triggers a fresh
+         byte-comparison against the server's sw.js.     */
+      registration.update().catch(() => { /* non-fatal */ });
+
+      const SW_UPDATE_INTERVAL_MS = 30 * 60 * 1000; /* 30 minutes */
+      setInterval(() => {
+        registration.update().catch(() => { /* non-fatal */ });
+      }, SW_UPDATE_INTERVAL_MS);
+
+      /* ── controllerchange ────────────────────────────
+         Fired when a new SW takes control (after
+         skipWaiting + clients.claim()).
+
+         IMPORTANT: We do NOT auto-reload here.
+         Auto-reloading on controllerchange would
+         interrupt a currently playing song without
+         user consent. The toast "Refresh" button
+         handles the user-initiated reload instead.
+
+         We simply log the event for debugging.        */
       navigator.serviceWorker.addEventListener('controllerchange', () => {
-        if (initialController) {
-          window.location.reload();
-        }
-        initialController = navigator.serviceWorker.controller;
+        console.info('[SW] Controller changed — new SW is now active.');
+        /* Do NOT call window.location.reload() here. */
       });
     })
     .catch(err => {
       console.warn('[SW] Registration failed:', err);
     });
 
+  /* ── Incoming messages from the SW ──────────────── */
   navigator.serviceWorker.addEventListener('message', (event) => {
     if (!event.data) return;
-    if (event.data.type === 'SW_VERSION') {
-      console.info('[SW] Version info:', event.data);
+
+    switch (event.data.type) {
+      case 'SW_VERSION':
+        console.info('[SW] Version info:', event.data);
+        break;
+
+      case 'SW_ACTIVATED':
+        /* New SW activated and claimed clients.
+           Show the toast so the user can refresh
+           and get the latest files.              */
+        console.info('[SW] New SW activated:', event.data);
+        /* The SW has already claimed control — pages are
+           now being served by the new SW. Prompt user. */
+        navigator.serviceWorker.getRegistration('/').then(reg => {
+          if (reg) showUpdateToast(reg, event.data.buildVersion);
+        }).catch(() => { /* non-fatal */ });
+        break;
+
+      default:
+      /* Unknown message — ignore */
     }
   });
 

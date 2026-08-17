@@ -1,0 +1,91 @@
+{
+  "headers": [
+    {
+      "_comment": "sw.js — MUST NEVER be CDN-cached. Browser detects a new SW",
+      "_comment2": "only by byte-comparing the freshly downloaded sw.js against",
+      "_comment3": "the installed copy. no-store prevents any CDN/browser caching.",
+      "source": "/sw.js",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-cache, no-store, must-revalidate"
+        },
+        {
+          "key": "Pragma",
+          "value": "no-cache"
+        },
+        {
+          "key": "Expires",
+          "value": "0"
+        },
+        {
+          "key": "Service-Worker-Allowed",
+          "value": "/"
+        }
+      ]
+    },
+    {
+      "_comment": "index.html — must revalidate on every request so users",
+      "_comment2": "always get the latest HTML (which loads the latest app.js).",
+      "_comment3": "no-cache = revalidate with server (uses ETag/304, still fast).",
+      "source": "/index.html",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-cache"
+        }
+      ]
+    },
+    {
+      "_comment": "JS files — revalidate on every request to prevent stale code.",
+      "source": "/:file(app|idb)\\.js",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-cache"
+        }
+      ]
+    },
+    {
+      "_comment": "CSS — revalidate so style changes reach users immediately.",
+      "source": "/style.css",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-cache"
+        }
+      ]
+    },
+    {
+      "_comment": "manifest.json — revalidate so PWA metadata is always current.",
+      "source": "/manifest.json",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-cache"
+        }
+      ]
+    },
+    {
+      "_comment": "offline.html — revalidate so the offline page is always current.",
+      "source": "/offline.html",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-cache"
+        }
+      ]
+    },
+    {
+      "_comment": "Icons — immutable; versioned by filename.",
+      "_comment2": "max-age=604800 = 7 days. These change only when the icon set changes.",
+      "source": "/icons/(.*)",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=604800, immutable"
+        }
+      ]
+    }
+  ]
+}
