@@ -95,6 +95,43 @@ const PLAYBACK_DEBUG = true;
  * ──────────────────────────────────────────────────────────────────────── */
 let playbackQueueFinished = false;
 
+/* ── Intentional-transition sentinel ─────────────────────────────────────
+ * Set to true immediately before a programmatic next/prev/seek action that
+ * will trigger a 'pause' event on the current audio node as a side-effect
+ * (e.g. pausing the old track before starting the next one, or some browsers
+ * firing pause+play around a currentTime seek).
+ *
+ * When true, the 'pause' event handler skips the
+ *   navigator.mediaSession.playbackState = 'paused'
+ * update so the OS notification never briefly flickers to a "paused" state
+ * during what is purely an internal transition.
+ *
+ * Reset to false automatically after a short timeout (16 ms — one frame) so
+ * genuine user pauses are still reflected correctly.
+ * ──────────────────────────────────────────────────────────────────────── */
+let _intentionalTransition = false;
+let _intentionalTransitionTimer = null;
+
+/** Mark the next pause event(s) as intentional (suppress notification flicker). */
+function _beginIntentionalTransition() {
+  _intentionalTransition = true;
+  /* Safety: auto-reset after one animation frame in case 'play' never fires */
+  if (_intentionalTransitionTimer !== null) clearTimeout(_intentionalTransitionTimer);
+  _intentionalTransitionTimer = setTimeout(() => {
+    _intentionalTransition = false;
+    _intentionalTransitionTimer = null;
+  }, 16);
+}
+
+/** Reset the sentinel immediately (called at the start of the new 'play' event). */
+function _endIntentionalTransition() {
+  _intentionalTransition = false;
+  if (_intentionalTransitionTimer !== null) {
+    clearTimeout(_intentionalTransitionTimer);
+    _intentionalTransitionTimer = null;
+  }
+}
+
 
 /* ── Initialise ─────────────────────────────────── */
 window.addEventListener('DOMContentLoaded', () => {
@@ -898,6 +935,12 @@ function wireAudioAutoplay(audioNodes, songs = []) {
          redirecting playNextSong() into the wrong queue.
     ──────────────────────────────────────────────── */
     audio.addEventListener('play', () => {
+      /* ── Bug 2 fix: end any in-flight intentional transition ────────────
+         The new track is now playing — clear the transition sentinel so
+         subsequent genuine pause events are handled normally.
+      ──────────────────────────────────────────────────────────────────── */
+      _endIntentionalTransition();
+
       if (PLAYBACK_DEBUG) {
         console.debug('[Playback] play event fired', {
           action: 'play',
@@ -931,32 +974,43 @@ function wireAudioAutoplay(audioNodes, songs = []) {
       setNowPlaying(cardIndex);
 
       /* ── Sync central playback state ─────────────────────────────────
-         Only update pbState when this batch IS the active queue, or when
-         pbState is unset (first-ever play) or when this batch became active
-         via a user action (playSongByIndex sets pbState.nodes before calling
-         audio.play(), so audioNodes === pbState.nodes is already true there).
+         Update pbState when:
+           1. This batch IS the already-active queue (normal auto-advance).
+           2. pbState is unset / empty (first-ever play on page load).
+           3. This is a USER-INITIATED play — i.e. NOT triggered by an
+              automatic crossfade.  When the user manually taps a song card
+              from ANY section (search results, recently released, shuffle),
+              they are explicitly switching the active queue to that section.
+              Crossfade-triggered plays always set activeCrossfadePair first,
+              so we detect user intent by checking that no crossfade is active
+              for this specific (other→audio) pair.
 
-         If this batch is NOT the active queue (e.g. a crossfade from the
-         Recently Released section continued into its second song while the
-         user is listening to Search results), we do NOT overwrite pbState.
-         This is the primary fix for the queue-restart bug.
+         The only case we must NOT update pbState is when a background section's
+         crossfade auto-advance fires — that would silently redirect next/prev
+         navigation into the wrong queue.
       ── */
-      if (audioNodes === pbState.nodes || pbState.nodes.length === 0) {
+      const isCrossfadePlay = activeCrossfadePair && activeCrossfadePair.to === audio;
+      const isUserInitiated = !isCrossfadePlay;
+
+      if (audioNodes === pbState.nodes || pbState.nodes.length === 0 || isUserInitiated) {
         pbState.queue = songs;
         pbState.nodes = audioNodes;
         pbState.index = idx;
+        /* Also reset the queue-finished flag when user picks a new song */
+        if (isUserInitiated) playbackQueueFinished = false;
 
         if (PLAYBACK_DEBUG) {
-          console.debug('[Queue] pbState updated (active batch)', {
+          console.debug('[Queue] pbState updated', {
+            reason: isUserInitiated ? 'user-initiated' : 'active-batch',
             title: songs[idx]?.title,
             index: idx,
             queueLength: audioNodes.length,
           });
         }
       } else {
-        /* Background / stale batch fired play — do NOT hijack pbState */
+        /* Background crossfade auto-advance — do NOT hijack pbState */
         if (PLAYBACK_DEBUG) {
-          console.warn('[Queue] IGNORED pbState update — this batch is NOT the active queue', {
+          console.warn('[Queue] IGNORED pbState update — background crossfade auto-advance', {
             firingTitle: songs[idx]?.title,
             activeBatchFirstSong: pbState.queue[0]?.title,
             activeBatchLength: pbState.nodes.length,
@@ -997,7 +1051,13 @@ function wireAudioAutoplay(audioNodes, songs = []) {
        by the browser when it reaches the end of the file.
     ──────────────────────────────────────────────── */
     audio.addEventListener('pause', () => {
-      if ('mediaSession' in navigator) {
+      /* ── Bug 2 fix: suppress flicker during intentional transitions ──────
+         If a programmatic next/prev/seek operation triggered this pause as a
+         side-effect, do NOT update playbackState to 'paused' — the incoming
+         track's 'play' event will set it to 'playing' within milliseconds.
+         Only set 'paused' for genuine user-initiated pause actions.
+      ──────────────────────────────────────────────────────────────────── */
+      if ('mediaSession' in navigator && !_intentionalTransition) {
         navigator.mediaSession.playbackState = 'paused';
       }
 
@@ -1469,6 +1529,14 @@ function playSongByIndex(idx) {
   /* Reset crossfade sentinel so the global enforcer works normally */
   activeCrossfadePair = null;
 
+  /* ── Bug 2 fix: mark transition as intentional before pausing old track ──
+     The pause events fired on other nodes during the transition below are
+     programmatic side-effects — not genuine user pauses.  Setting this flag
+     prevents the pause handler from briefly setting playbackState = 'paused'
+     and causing the OS notification to flicker.
+  ──────────────────────────────────────────────────────────────────────── */
+  _beginIntentionalTransition();
+
   /* Pause everything else in the global registry */
   for (const node of globalAudioRegistry) {
     if (node !== audio && !node.paused) node.pause();
@@ -1754,6 +1822,9 @@ function initMediaSession() {
       navigator.mediaSession.setActionHandler('seekbackward', (details) => {
         const audio = pbState.nodes[pbState.index];
         if (!audio) return;
+        /* Bug 2 fix: mark as intentional so seek-triggered pause events
+           don't flicker the notification to 'paused'. */
+        _beginIntentionalTransition();
         const step = (details && details.seekOffset != null) ? details.seekOffset : SEEK_STEP;
         audio.currentTime = Math.max(0, audio.currentTime - step);
       });
@@ -1763,6 +1834,9 @@ function initMediaSession() {
       navigator.mediaSession.setActionHandler('seekforward', (details) => {
         const audio = pbState.nodes[pbState.index];
         if (!audio) return;
+        /* Bug 2 fix: mark as intentional so seek-triggered pause events
+           don't flicker the notification to 'paused'. */
+        _beginIntentionalTransition();
         const step = (details && details.seekOffset != null) ? details.seekOffset : SEEK_STEP;
         const max = isFinite(audio.duration) ? audio.duration : Infinity;
         audio.currentTime = Math.min(max, audio.currentTime + step);
