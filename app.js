@@ -3122,7 +3122,7 @@ async function downloadSong(url, filename, btn) {
           !tracker.playCountRegistered &&
           isFinite(audio.duration) &&
           audio.duration > 0 &&
-          tracker.accumulatedListeningTime >= audio.duration * 0.60
+          tracker.accumulatedListeningTime >= audio.duration * 0.80
         ) {
           /* Lock BEFORE async call — prevents race with next tick */
           tracker.playCountRegistered = true;
