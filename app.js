@@ -2480,7 +2480,7 @@ async function downloadSong(url, filename, btn) {
   const chevronIcon = dropdownToggle.querySelector('.shuffle-chevron-icon');
 
   /* ── State ─────────────────────────────────── */
-  /* Active mode: 'all' | 'nigerian' | 'foreign' */
+  /* Active mode: 'all' | 'nigerian' | 'foreign' | 'gospel' */
   let activeMode = 'all';
   let dropdownOpen = false;
 
@@ -2530,6 +2530,11 @@ async function downloadSong(url, filename, btn) {
         s.category && s.category.trim() === 'Foreign Music'
       );
     }
+    if (mode === 'gospel') {
+      return allSongs.filter(s =>
+        s.category && s.category.trim() === 'Gospel Music'
+      );
+    }
     /* 'all' → entire catalogue */
     return allSongs;
   }
@@ -2543,6 +2548,10 @@ async function downloadSong(url, filename, btn) {
     if (mode === 'foreign') {
       return `<i class="bi bi-shuffle me-1" style="color:#818cf8;font-size:.9em"></i> ` +
         `🌎 International Shuffle — <strong>${count}</strong> random foreign song${count !== 1 ? 's' : ''} selected.`;
+    }
+    if (mode === 'gospel') {
+      return `<i class="bi bi-shuffle me-1" style="color:#f97316;font-size:.9em"></i> ` +
+        `🙏 Gospel Shuffle — <strong>${count}</strong> random gospel song${count !== 1 ? 's' : ''} selected.`;
     }
     /* 'all' */
     return `<i class="bi bi-shuffle me-1" style="color:#2dd4bf;font-size:.9em"></i> ` +
