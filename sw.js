@@ -37,7 +37,7 @@
    ===================================================== */
 
 /* ── Build identity — change both on every deploy ── */
-const SJR_BUILD_VERSION = '2026-10-30-v3';
+const SJR_BUILD_VERSION = '2026-10-30-v4-icon-fix';
 console.log('[SW] SJrMusic Build:', SJR_BUILD_VERSION);
 
 /* ── Cache version — INCREMENT this on every deploy ── */
@@ -64,15 +64,20 @@ const APP_SHELL_UPDATABLE = new Set([
   '/offline.html',
   '/manifest.json',
   '/style.css',
-]);
-
-/* ── Static app shell — pre-cached at install time ───
-   Icons / images that rarely change.
-   Cache-First is fine for these.                      */
-const APP_SHELL_STATIC = [
+  /* Icons — moved here (Network-First) so new brand assets are always fetched fresh */
   '/icons/icon-192.png',
   '/icons/icon-512.png',
   '/icons/apple-touch-icon.png',
+  '/icons/crown-note-logo.svg',
+  '/icons/crown-note-header.svg',
+]);
+
+/* ── Static app shell — pre-cached at install time ────────────────────────────────────────────────
+   Icons have been moved to APP_SHELL_UPDATABLE (Network-First) so they are
+   always refreshed on each deploy. This list is intentionally empty for now.
+   ────────────────────────────────────────────────────────────────────── */
+const APP_SHELL_STATIC = [
+  /* intentionally empty — icons now in APP_SHELL_UPDATABLE */
 ];
 
 /* ── CDN assets — pre-cached at install time ─── */
