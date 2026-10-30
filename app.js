@@ -8,7 +8,7 @@
    Matches the SJR_BUILD_VERSION in sw.js.
    Visible in the browser console to confirm which
    version Vercel is currently serving.               */
-const SJR_BUILD_VERSION = '2026-08-17-v2';
+const SJR_BUILD_VERSION = '2026-10-30-v3';
 console.log('SJrMusic Build:', SJR_BUILD_VERSION);
 
 const API_URL = 'https://sjr-music-api-gold.vercel.app/music';
@@ -2072,9 +2072,19 @@ async function downloadSong(url, filename, btn) {
 
 
 /* =====================================================
-   FAVOURITES MODULE
+   FAVOURITES MODULE  (v3 — with Offline Playback)
    Self-contained; reads/writes localStorage.
-   Injects heart buttons after every card-build cycle.
+   Injects heart buttons + offline-status badges after every card-build cycle.
+
+   Offline strategy:
+     • When a song is ADDED to Favourites — if it has a valid audio URL, we
+       ask the Service Worker to fetch and store the audio in the dedicated
+       "sjrmusic-offline-favs" Cache Storage.  The user sees a pulsing
+       "Saving offline…" badge, then a green "Available offline" badge.
+     • When a song is REMOVED from Favourites — we ask the Service Worker to
+       delete its audio from the cache.  The badge disappears.
+     • On playback — sw.js checks the offline-favs cache BEFORE applying the
+       audio bypass pattern, so cached audio plays without any network request.
    ===================================================== */
 
 (function initFavourites() {
@@ -2110,6 +2120,207 @@ async function downloadSong(url, filename, btn) {
     return loadFavs().some(f => songKey(f) === songKey(song));
   }
 
+  /* ── Service Worker messaging helpers ─────────────────────────────────── */
+
+  /**
+   * Sends a message to the active Service Worker.
+   * No-ops silently if there is no active SW.
+   * @param {object} msg
+   */
+  function sendToSW(msg) {
+    if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+      navigator.serviceWorker.controller.postMessage(msg);
+    }
+  }
+
+  /**
+   * Asks the SW to check if `url` is already cached in the offline-favs cache.
+   * Returns a Promise<boolean>.
+   * @param {string} url
+   * @returns {Promise<boolean>}
+   */
+  function checkCachedBySW(url) {
+    return new Promise(resolve => {
+      if (!('serviceWorker' in navigator) || !navigator.serviceWorker.controller) {
+        resolve(false);
+        return;
+      }
+      const timeout = setTimeout(() => resolve(false), 3000);
+      const handler = (event) => {
+        if (event.data && event.data.type === 'FAV_AUDIO_STATUS' && event.data.url === url) {
+          clearTimeout(timeout);
+          navigator.serviceWorker.removeEventListener('message', handler);
+          resolve(!!event.data.cached);
+        }
+      };
+      navigator.serviceWorker.addEventListener('message', handler);
+      sendToSW({ type: 'CHECK_FAV_AUDIO', url });
+    });
+  }
+
+  /* ── In-memory cache status map ────────────────────────────────────────
+   * Tracks offline-cache status of each audio URL.
+   * Keys: audio URL (string).  Values: 'pending' | 'cached' | 'failed' | null
+   */
+  const LS_OFFLINE_KEY = 'sjrmusic_offline_favs';
+
+  function loadOfflineMap() {
+    try { return JSON.parse(localStorage.getItem(LS_OFFLINE_KEY)) || {}; }
+    catch { return {}; }
+  }
+
+  function saveOfflineMap(map) {
+    try { localStorage.setItem(LS_OFFLINE_KEY, JSON.stringify(map)); } catch { /* quota */ }
+  }
+
+  /** Returns the offline status for a URL: 'cached' | 'pending' | 'failed' | null */
+  function getOfflineStatus(url) {
+    if (!url) return null;
+    return loadOfflineMap()[url] || null;
+  }
+
+  function setOfflineStatus(url, status) {
+    if (!url) return;
+    const map = loadOfflineMap();
+    if (status === null) { delete map[url]; } else { map[url] = status; }
+    saveOfflineMap(map);
+  }
+
+  /* ── Offline badge helpers ──────────────────────────────────────────────
+   * status values:
+   *   'pending' — pulsing spinner (audio is being fetched right now)
+   *   'cached'  — green badge (ready to play without internet)
+   *   'failed'  — muted badge (cache failed, network still required)
+   *   null      — remove badge entirely
+   */
+  function setCardOfflineBadge(cardEl, status) {
+    let badge = cardEl.querySelector('.fav-offline-badge');
+    if (status === null) { if (badge) badge.remove(); return; }
+    if (!badge) {
+      badge = document.createElement('div');
+      badge.className = 'fav-offline-badge';
+      cardEl.appendChild(badge);
+    }
+    badge.className = 'fav-offline-badge';
+    if (status === 'pending') {
+      badge.classList.add('fav-offline-pending');
+      badge.innerHTML = '<span class="fav-offline-spinner"></span><span class="fav-offline-label">Saving offline…</span>';
+      badge.title = 'Caching audio for offline playback…';
+    } else if (status === 'cached') {
+      badge.classList.add('fav-offline-cached');
+      badge.innerHTML = '<i class="bi bi-wifi-off fav-offline-icon"></i><span class="fav-offline-label">Available offline</span>';
+      badge.title = 'This song is saved offline — plays without internet';
+    } else if (status === 'failed') {
+      badge.classList.add('fav-offline-failed');
+      badge.innerHTML = '<i class="bi bi-exclamation-circle fav-offline-icon"></i><span class="fav-offline-label">Offline save failed</span>';
+      badge.title = 'Could not save offline — internet required to play';
+    }
+  }
+
+  /** Update the offline badge on every .song-card with this audio URL. */
+  function syncCardBadgesByUrl(audioUrl, status) {
+    [resultsGrid, recentGrid].forEach(grid => {
+      grid.querySelectorAll('.song-card').forEach(card => {
+        const src = card.querySelector('source');
+        if (src && src.getAttribute('src') === audioUrl) {
+          setCardOfflineBadge(card, status);
+        }
+      });
+    });
+  }
+
+  /** Update badges on all cards matching a song by favKey OR by source URL. */
+  function syncCardBadgesForSong(song, status) {
+    const key = songKey(song);
+    [resultsGrid, recentGrid].forEach(grid => {
+      grid.querySelectorAll('.song-card').forEach(card => {
+        if (card.dataset.favKey === key) setCardOfflineBadge(card, status);
+      });
+    });
+    if (song.songUrl) syncCardBadgesByUrl(song.songUrl, status);
+  }
+
+  /* ── Caching actions ────────────────────────────────────────────────────
+   * Called on add/remove from favourites.  No-ops if song has no audio URL.
+   */
+
+  function cacheFavAudio(song) {
+    const url = song.songUrl;
+    if (!isValidAudioUrl(url)) return;
+    setOfflineStatus(url, 'pending');
+    syncCardBadgesForSong(song, 'pending');
+    sendToSW({ type: 'CACHE_FAV_AUDIO', url });
+    console.info('[Favourites] Requested offline caching for:', song.title);
+  }
+
+  function uncacheFavAudio(song) {
+    const url = song.songUrl;
+    if (!isValidAudioUrl(url)) return;
+    setOfflineStatus(url, null);
+    syncCardBadgesForSong(song, null);
+    sendToSW({ type: 'REMOVE_FAV_AUDIO', url });
+    console.info('[Favourites] Removed offline cache for:', song.title);
+  }
+
+  /* ── Listen for SW replies ──────────────────────────────────────────────
+   * The SW sends back messages after CACHE_FAV_AUDIO / REMOVE_FAV_AUDIO.
+   * Update the status map and refresh badges on all matching cards.
+   */
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.addEventListener('message', (event) => {
+      if (!event.data) return;
+
+      if (event.data.type === 'FAV_AUDIO_CACHED') {
+        const { url, ok } = event.data;
+        const status = ok ? 'cached' : 'failed';
+        setOfflineStatus(url, status);
+        syncCardBadgesByUrl(url, status);
+        if (ok) {
+          console.info('[Favourites] Audio cached — offline ready:', url);
+        } else {
+          console.warn('[Favourites] Audio cache failed:', url, event.data.error);
+        }
+      }
+
+      if (event.data.type === 'FAV_AUDIO_REMOVED') {
+        const { url } = event.data;
+        setOfflineStatus(url, null);
+        syncCardBadgesByUrl(url, null);
+        console.info('[Favourites] Audio removed from offline cache:', url);
+      }
+    });
+  }
+
+  /* ── Reconcile on page load ─────────────────────────────────────────────
+   * After 2 s, verify with the SW that each favourite's audio is truly in
+   * the cache.  Re-caches any that are missing (e.g. after browser data clear).
+   */
+  async function reconcileOfflineStatus() {
+    const favs = loadFavs();
+    if (!favs.length) return;
+    if (!('serviceWorker' in navigator)) return;
+    try { await navigator.serviceWorker.ready; } catch { return; }
+
+    for (const song of favs) {
+      const url = song.songUrl;
+      if (!isValidAudioUrl(url)) continue;
+      const currentStatus = getOfflineStatus(url);
+      checkCachedBySW(url).then(isCached => {
+        if (isCached) {
+          /* Confirm cached in localStorage so badge shows correctly */
+          setOfflineStatus(url, 'cached');
+          syncCardBadgesForSong(song, 'cached');
+        } else {
+          /* Not in SW cache — initiate caching */
+          console.info('[Favourites] Reconcile: not cached, caching now:', song.title);
+          cacheFavAudio(song);
+        }
+      });
+    }
+  }
+
+  window.addEventListener('load', () => { setTimeout(reconcileOfflineStatus, 2000); });
+
   /** Adds or removes a song from favourites; returns the new state (true = added). */
   function toggleFav(song) {
     const favs = loadFavs();
@@ -2118,10 +2329,12 @@ async function downloadSong(url, filename, btn) {
     if (idx === -1) {
       favs.push(song);
       saveFavs(favs);
+      cacheFavAudio(song); /* cache audio for offline playback */
       return true;  /* added */
     } else {
       favs.splice(idx, 1);
       saveFavs(favs);
+      uncacheFavAudio(song); /* remove cached audio */
       return false; /* removed */
     }
   }
@@ -2176,6 +2389,8 @@ async function downloadSong(url, filename, btn) {
       } else {
         btn.classList.remove('is-fav');
         btn.title = 'Add to favourites';
+        /* Remove offline badge immediately when song is un-favourited */
+        setCardOfflineBadge(cardEl, null);
       }
 
       /* Keep every copy of this song's heart in sync across both grids */
@@ -2186,6 +2401,12 @@ async function downloadSong(url, filename, btn) {
     });
 
     cardEl.appendChild(btn);
+
+    /* Inject offline badge if song is already favourited and status is known */
+    if (isFav(song) && isValidAudioUrl(song.songUrl)) {
+      const status = getOfflineStatus(song.songUrl);
+      if (status) setCardOfflineBadge(cardEl, status);
+    }
   }
 
   /**
@@ -2200,6 +2421,8 @@ async function downloadSong(url, filename, btn) {
         if (card.dataset.favKey === songKey(song)) {
           btn.classList.toggle('is-fav', isFavNow);
           btn.title = isFavNow ? 'Remove from favourites' : 'Add to favourites';
+          /* Sync offline badge: remove when un-favourited */
+          if (!isFavNow) setCardOfflineBadge(card, null);
         }
       });
     });

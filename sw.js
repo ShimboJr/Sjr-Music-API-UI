@@ -37,14 +37,21 @@
    ===================================================== */
 
 /* ── Build identity — change both on every deploy ── */
-const SJR_BUILD_VERSION = '2026-08-17-v2';
+const SJR_BUILD_VERSION = '2026-10-30-v3';
 console.log('[SW] SJrMusic Build:', SJR_BUILD_VERSION);
 
 /* ── Cache version — INCREMENT this on every deploy ── */
-const CACHE_VERSION = 'v2';
+const CACHE_VERSION = 'v3';
 const CACHE_NAME = `sjrmusic-${CACHE_VERSION}`;
 const API_CACHE_NAME = `sjrmusic-api-${CACHE_VERSION}`;
 const IMAGE_CACHE_NAME = `sjrmusic-img-${CACHE_VERSION}`;
+
+/* ── Offline Favourites audio cache ────────────────────────────────────────
+   This cache is INTENTIONALLY version-independent — it persists across
+   deploys so users don't lose their offline songs after an update.
+   It is only cleared when the user explicitly removes a song from Favourites.
+   ─────────────────────────────────────────────────────────────────────────── */
+const OFFLINE_FAVS_CACHE = 'sjrmusic-offline-favs';
 
 /* ── Updatable app shell files ────────────────────────
    These use Network-First so they are always refreshed
@@ -150,7 +157,8 @@ self.addEventListener('activate', (event) => {
 
   event.waitUntil(
     (async () => {
-      const validCaches = new Set([CACHE_NAME, API_CACHE_NAME, IMAGE_CACHE_NAME]);
+      /* OFFLINE_FAVS_CACHE is always preserved — never auto-deleted on version change */
+      const validCaches = new Set([CACHE_NAME, API_CACHE_NAME, IMAGE_CACHE_NAME, OFFLINE_FAVS_CACHE]);
       const existingKeys = await caches.keys();
 
       /* IMPORTANT: Only delete caches that belong to SJrMusic
@@ -197,9 +205,22 @@ self.addEventListener('fetch', (event) => {
     return; /* browser default behaviour */
   }
 
-  /* ── Bypass patterns — audio streams, proxies, etc. ── */
+  /* ── Offline Favourites audio cache — checked BEFORE bypass patterns ──────
+     If this audio URL has been cached for offline favourites playback, serve
+     it from cache immediately — no network needed, even if offline.          */
   if (BYPASS_PATTERNS.some(pattern => pattern.test(request.url))) {
-    return; /* don't intercept */
+    /* Before bypassing, check the offline-favs cache for this audio URL */
+    event.respondWith(
+      caches.open(OFFLINE_FAVS_CACHE).then(cache => cache.match(request)).then(cached => {
+        if (cached) {
+          console.info('[SW] Serving offline-fav audio from cache:', request.url);
+          return cached;
+        }
+        /* Not in offline-favs cache — pass through to network as normal */
+        return fetch(request);
+      }).catch(() => fetch(request))
+    );
+    return;
   }
 
   /* ── Google Fonts CSS → Stale While Revalidate ── */
@@ -482,6 +503,87 @@ self.addEventListener('message', (event) => {
         cacheVersion: CACHE_VERSION,
       });
       break;
+
+    /* ── Cache a favourite song's audio for offline playback ────────────────
+       Payload: { type: 'CACHE_FAV_AUDIO', url: string }
+       The SW fetches the audio URL, stores the full response blob in
+       OFFLINE_FAVS_CACHE, and replies with { type: 'FAV_AUDIO_CACHED', url, ok }.
+       ─────────────────────────────────────────────────────────────────────── */
+    case 'CACHE_FAV_AUDIO': {
+      const audioUrl = event.data.url;
+      if (!audioUrl) break;
+
+      (async () => {
+        try {
+          const cache = await caches.open(OFFLINE_FAVS_CACHE);
+
+          /* Check if already cached — avoids redundant network fetch */
+          const existing = await cache.match(audioUrl);
+          if (existing) {
+            console.info('[SW] CACHE_FAV_AUDIO — already cached:', audioUrl);
+            event.source?.postMessage({ type: 'FAV_AUDIO_CACHED', url: audioUrl, ok: true, alreadyCached: true });
+            break;
+          }
+
+          console.info('[SW] CACHE_FAV_AUDIO — fetching for offline storage:', audioUrl);
+          const response = await fetch(audioUrl);
+
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+          /* Store the full audio response in the dedicated offline-favs cache */
+          await cache.put(audioUrl, response.clone());
+
+          console.info('[SW] CACHE_FAV_AUDIO — stored successfully:', audioUrl);
+          event.source?.postMessage({ type: 'FAV_AUDIO_CACHED', url: audioUrl, ok: true });
+
+        } catch (err) {
+          console.error('[SW] CACHE_FAV_AUDIO — failed:', audioUrl, err.message);
+          event.source?.postMessage({ type: 'FAV_AUDIO_CACHED', url: audioUrl, ok: false, error: err.message });
+        }
+      })();
+      break;
+    }
+
+    /* ── Remove a favourite song's cached audio (song removed from favs) ────
+       Payload: { type: 'REMOVE_FAV_AUDIO', url: string }
+       ─────────────────────────────────────────────────────────────────────── */
+    case 'REMOVE_FAV_AUDIO': {
+      const audioUrl = event.data.url;
+      if (!audioUrl) break;
+
+      (async () => {
+        try {
+          const cache = await caches.open(OFFLINE_FAVS_CACHE);
+          const deleted = await cache.delete(audioUrl);
+          console.info('[SW] REMOVE_FAV_AUDIO —', deleted ? 'deleted' : 'not found (already gone):', audioUrl);
+          event.source?.postMessage({ type: 'FAV_AUDIO_REMOVED', url: audioUrl, ok: true });
+        } catch (err) {
+          console.error('[SW] REMOVE_FAV_AUDIO — failed:', audioUrl, err.message);
+          event.source?.postMessage({ type: 'FAV_AUDIO_REMOVED', url: audioUrl, ok: false, error: err.message });
+        }
+      })();
+      break;
+    }
+
+    /* ── Check if a URL is cached for offline playback ──────────────────────
+       Payload: { type: 'CHECK_FAV_AUDIO', url: string }
+       Reply:   { type: 'FAV_AUDIO_STATUS', url, cached: boolean }
+       ─────────────────────────────────────────────────────────────────────── */
+    case 'CHECK_FAV_AUDIO': {
+      const audioUrl = event.data.url;
+      if (!audioUrl) break;
+
+      (async () => {
+        try {
+          const cache = await caches.open(OFFLINE_FAVS_CACHE);
+          const match = await cache.match(audioUrl);
+          event.source?.postMessage({ type: 'FAV_AUDIO_STATUS', url: audioUrl, cached: !!match });
+        } catch {
+          event.source?.postMessage({ type: 'FAV_AUDIO_STATUS', url: audioUrl, cached: false });
+        }
+      })();
+      break;
+    }
 
     default:
     /* Unknown message — ignore */
