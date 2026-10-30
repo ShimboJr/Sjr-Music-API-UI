@@ -508,21 +508,25 @@ self.addEventListener('message', (event) => {
        Payload: { type: 'CACHE_FAV_AUDIO', url: string }
        The SW fetches the audio URL, stores the full response blob in
        OFFLINE_FAVS_CACHE, and replies with { type: 'FAV_AUDIO_CACHED', url, ok }.
+
+       IMPORTANT: `break` is ILLEGAL inside a nested function/arrow function.
+       Use `return` to early-exit from the async IIFE instead.
        ─────────────────────────────────────────────────────────────────────── */
     case 'CACHE_FAV_AUDIO': {
       const audioUrl = event.data.url;
       if (!audioUrl) break;
 
-      (async () => {
+      /* event.waitUntil keeps the SW alive for the full async operation */
+      event.waitUntil((async () => {
         try {
           const cache = await caches.open(OFFLINE_FAVS_CACHE);
 
-          /* Check if already cached — avoids redundant network fetch */
+          /* Check if already cached — avoids a redundant network fetch */
           const existing = await cache.match(audioUrl);
           if (existing) {
             console.info('[SW] CACHE_FAV_AUDIO — already cached:', audioUrl);
             event.source?.postMessage({ type: 'FAV_AUDIO_CACHED', url: audioUrl, ok: true, alreadyCached: true });
-            break;
+            return; /* ← return, NOT break — break is illegal inside a function */
           }
 
           console.info('[SW] CACHE_FAV_AUDIO — fetching for offline storage:', audioUrl);
@@ -540,7 +544,7 @@ self.addEventListener('message', (event) => {
           console.error('[SW] CACHE_FAV_AUDIO — failed:', audioUrl, err.message);
           event.source?.postMessage({ type: 'FAV_AUDIO_CACHED', url: audioUrl, ok: false, error: err.message });
         }
-      })();
+      })());
       break;
     }
 
@@ -551,7 +555,7 @@ self.addEventListener('message', (event) => {
       const audioUrl = event.data.url;
       if (!audioUrl) break;
 
-      (async () => {
+      event.waitUntil((async () => {
         try {
           const cache = await caches.open(OFFLINE_FAVS_CACHE);
           const deleted = await cache.delete(audioUrl);
@@ -561,7 +565,7 @@ self.addEventListener('message', (event) => {
           console.error('[SW] REMOVE_FAV_AUDIO — failed:', audioUrl, err.message);
           event.source?.postMessage({ type: 'FAV_AUDIO_REMOVED', url: audioUrl, ok: false, error: err.message });
         }
-      })();
+      })());
       break;
     }
 
@@ -573,7 +577,7 @@ self.addEventListener('message', (event) => {
       const audioUrl = event.data.url;
       if (!audioUrl) break;
 
-      (async () => {
+      event.waitUntil((async () => {
         try {
           const cache = await caches.open(OFFLINE_FAVS_CACHE);
           const match = await cache.match(audioUrl);
@@ -581,7 +585,7 @@ self.addEventListener('message', (event) => {
         } catch {
           event.source?.postMessage({ type: 'FAV_AUDIO_STATUS', url: audioUrl, cached: false });
         }
-      })();
+      })());
       break;
     }
 
