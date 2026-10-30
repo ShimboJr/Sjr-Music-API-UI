@@ -1,0 +1,124 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <!-- Purple-to-violet gradient for the background square -->
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#5b21b6"/>
+      <stop offset="50%" stop-color="#7c3aed"/>
+      <stop offset="100%" stop-color="#a855f7"/>
+    </linearGradient>
+
+    <!-- Gold gradient for the crown -->
+    <linearGradient id="goldGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#fde68a"/>
+      <stop offset="40%" stop-color="#f0b429"/>
+      <stop offset="100%" stop-color="#d97706"/>
+    </linearGradient>
+
+    <!-- White-to-light gradient for note body -->
+    <linearGradient id="noteGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#e2d9ff"/>
+    </linearGradient>
+
+    <!-- Subtle inner glow filter -->
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="8" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <!-- Crown glow -->
+    <filter id="crownGlow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="6" result="blur"/>
+      <feFlood flood-color="#f0b429" flood-opacity="0.4" result="color"/>
+      <feComposite in="color" in2="blur" operator="in" result="shadow"/>
+      <feMerge>
+        <feMergeNode in="shadow"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <!-- Rounded square clip path -->
+    <clipPath id="roundedSquare">
+      <rect width="512" height="512" rx="110" ry="110"/>
+    </clipPath>
+  </defs>
+
+  <!-- Background: rounded square with purple gradient -->
+  <rect width="512" height="512" rx="110" ry="110" fill="url(#bgGrad)"/>
+
+  <!-- Subtle radial highlight at top-center for depth -->
+  <ellipse cx="256" cy="80" rx="200" ry="120"
+    fill="rgba(255,255,255,0.07)"/>
+
+  <!-- ═══ MUSICAL NOTE BODY ═══ -->
+
+  <!-- Note head — tilted filled ellipse at the bottom -->
+  <!-- Center: (205, 370), major radius 80, minor radius 55, rotated -22° -->
+  <ellipse cx="205" cy="370" rx="82" ry="56"
+    fill="url(#noteGrad)"
+    filter="url(#glow)"
+    transform="rotate(-22, 205, 370)"/>
+
+  <!-- Note stem — vertical bar connecting head to crown base -->
+  <!-- Goes from (275, 345) up to (275, 178) -->
+  <rect x="262" y="174" width="28" height="185" rx="14"
+    fill="url(#noteGrad)"/>
+
+  <!-- ═══ CROWN (replaces the flag/beam) ═══ -->
+  <!--
+    The crown sits atop the stem, centered at x=276 (stem center).
+    Crown base: y=174. Crown spans x=178 to x=374 (196px wide).
+    Three prongs rise from the base band:
+      Left  prong top:   (178, 92)
+      Center prong top:  (276, 72)   ← tallest = most important = center
+      Right  prong top:  (374, 92)
+    Inner dips (between prongs):
+      Left dip:  (227, 130)
+      Right dip: (325, 130)
+    Crown base band:     y=174 to y=200 (26px thick)
+    Small circular gems at each prong tip
+  -->
+
+  <!-- Crown main body path -->
+  <path d="
+    M 178,200
+    L 178,92
+    L 227,134
+    L 276,72
+    L 325,134
+    L 374,92
+    L 374,200
+    Z
+  "
+    fill="url(#goldGrad)"
+    filter="url(#crownGlow)"/>
+
+  <!-- Crown base band (slightly darker band at bottom of crown) -->
+  <rect x="165" y="185" width="222" height="30" rx="10"
+    fill="#d97706"/>
+
+  <!-- Crown base band highlight line -->
+  <rect x="165" y="185" width="222" height="6" rx="3"
+    fill="rgba(255,255,255,0.25)"/>
+
+  <!-- Crown gem dots at each prong tip — circular white dots with gold ring -->
+  <!-- Center gem (largest) -->
+  <circle cx="276" cy="72" r="14" fill="#fff" opacity="0.95"/>
+  <circle cx="276" cy="72" r="9" fill="#f0b429"/>
+
+  <!-- Left gem -->
+  <circle cx="178" cy="92" r="11" fill="#fff" opacity="0.9"/>
+  <circle cx="178" cy="92" r="7" fill="#f0b429"/>
+
+  <!-- Right gem -->
+  <circle cx="374" cy="92" r="11" fill="#fff" opacity="0.9"/>
+  <circle cx="374" cy="92" r="7" fill="#f0b429"/>
+
+  <!-- Small pearl dots on crown base band -->
+  <circle cx="214" cy="200" r="5" fill="rgba(255,255,255,0.5)"/>
+  <circle cx="276" cy="200" r="5" fill="rgba(255,255,255,0.5)"/>
+  <circle cx="338" cy="200" r="5" fill="rgba(255,255,255,0.5)"/>
+</svg>

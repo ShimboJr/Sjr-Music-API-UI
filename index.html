@@ -23,7 +23,8 @@
   <meta name="apple-mobile-web-app-title" content="SJrMusic" />
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
 
-  <!-- Favicon -->
+  <!-- Favicon — SVG (modern browsers) + PNG fallback -->
+  <link rel="icon" type="image/svg+xml" href="icons/crown-note-logo.svg" />
   <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png" />
   <link rel="icon" type="image/png" sizes="512x512" href="icons/icon-512.png" />
 
@@ -51,8 +52,43 @@
     <div class="container position-relative">
       <div class="text-center py-5">
         <div class="logo-wrap mb-3">
-          <span class="logo-icon"><i class="bi bi-music-note-beamed"></i></span>
-          <span class="logo-text">SJr<span class="logo-accent">Music</span></span>
+          <!-- Crown Note SVG logo mark -->
+          <span class="logo-icon" aria-hidden="true">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="28" height="28" aria-hidden="true" focusable="false">
+              <defs>
+                <linearGradient id="hNoteG" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" stop-color="#ffffff"/>
+                  <stop offset="100%" stop-color="#e2d9ff"/>
+                </linearGradient>
+                <linearGradient id="hGoldG" x1="0%" y1="0%" x2="0%" y2="100%">
+                  <stop offset="0%" stop-color="#fde68a"/>
+                  <stop offset="50%" stop-color="#f0b429"/>
+                  <stop offset="100%" stop-color="#d97706"/>
+                </linearGradient>
+              </defs>
+              <!-- Note head -->
+              <ellipse cx="18.5" cy="35.5" rx="8.5" ry="5.5"
+                fill="url(#hNoteG)" transform="rotate(-22, 18.5, 35.5)"/>
+              <!-- Stem -->
+              <rect x="25.5" y="15.5" width="3" height="21" rx="1.5"
+                fill="url(#hNoteG)"/>
+              <!-- Crown body -->
+              <path d="M 16,19 L 16,9.5 L 21,14 L 27,8 L 33,14 L 38,9.5 L 38,19 Z"
+                fill="url(#hGoldG)"/>
+              <!-- Crown base band -->
+              <rect x="15" y="17.5" width="24" height="3.5" rx="1.75"
+                fill="#d97706"/>
+              <!-- Crown gems -->
+              <circle cx="27" cy="8" r="2.2" fill="#fff" opacity="0.95"/>
+              <circle cx="27" cy="8" r="1.3" fill="#f0b429"/>
+              <circle cx="16" cy="9.5" r="1.6" fill="#fff" opacity="0.9"/>
+              <circle cx="38" cy="9.5" r="1.6" fill="#fff" opacity="0.9"/>
+            </svg>
+          </span>
+          <!-- Wordmark: SJr (bold gradient) + Music (lighter) -->
+          <span class="logo-text" aria-label="SJrMusic">
+            <span class="logo-sjr">SJr</span><span class="logo-music-word">Music</span>
+          </span>
         </div>
         <h1 class="hero-title">Discover &amp; Stream Your Favourites</h1>
         <p class="hero-sub">Search across our full catalogue by song title, artist, or album</p>
@@ -259,8 +295,30 @@
   <!-- ───────────── FOOTER ───────────── -->
   <footer class="site-footer-bar">
     <div class="container text-center">
-      <span class="footer-logo"><i class="bi bi-music-note-beamed me-1"></i>SJrMusic</span>
-      <span class="footer-sep">•</span>
+      <span class="footer-logo">
+        <!-- Mini Crown Note in footer -->
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="16" height="16"
+          aria-hidden="true" focusable="false" style="vertical-align:-3px;margin-right:.3rem">
+          <defs>
+            <linearGradient id="fNoteG" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stop-color="#a855f7"/>
+              <stop offset="100%" stop-color="#7c3aed"/>
+            </linearGradient>
+            <linearGradient id="fGoldG" x1="0%" y1="0%" x2="0%" y2="100%">
+              <stop offset="0%" stop-color="#fde68a"/>
+              <stop offset="100%" stop-color="#d97706"/>
+            </linearGradient>
+          </defs>
+          <ellipse cx="18.5" cy="35.5" rx="8.5" ry="5.5"
+            fill="url(#fNoteG)" transform="rotate(-22, 18.5, 35.5)"/>
+          <rect x="25.5" y="15.5" width="3" height="21" rx="1.5" fill="url(#fNoteG)"/>
+          <path d="M 16,19 L 16,9.5 L 21,14 L 27,8 L 33,14 L 38,9.5 L 38,19 Z" fill="url(#fGoldG)"/>
+          <rect x="15" y="17.5" width="24" height="3.5" rx="1.75" fill="#d97706"/>
+          <circle cx="27" cy="8" r="2.2" fill="#fff" opacity="0.9"/>
+          <circle cx="16" cy="9.5" r="1.6" fill="#fff" opacity="0.85"/>
+          <circle cx="38" cy="9.5" r="1.6" fill="#fff" opacity="0.85"/>
+        </svg>SJrMusic</span>
+      <span class="footer-sep">&bull;</span>
       <span class="footer-text">Powered by the SJr Music API</span>
     </div>
   </footer>
@@ -275,7 +333,26 @@
     aria-label="Install SJrMusic app" aria-hidden="true">
     <div class="pwa-install-inner">
       <span class="pwa-install-icon" aria-hidden="true">
-        <i class="bi bi-phone-fill"></i>
+        <!-- Crown Note mini icon in install banner -->
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="28" height="28"
+          aria-hidden="true" focusable="false">
+          <defs>
+            <linearGradient id="pNoteG" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stop-color="#a855f7"/><stop offset="100%" stop-color="#7c3aed"/>
+            </linearGradient>
+            <linearGradient id="pGoldG" x1="0%" y1="0%" x2="0%" y2="100%">
+              <stop offset="0%" stop-color="#fde68a"/><stop offset="100%" stop-color="#d97706"/>
+            </linearGradient>
+          </defs>
+          <ellipse cx="18.5" cy="35.5" rx="8.5" ry="5.5"
+            fill="url(#pNoteG)" transform="rotate(-22, 18.5, 35.5)"/>
+          <rect x="25.5" y="15.5" width="3" height="21" rx="1.5" fill="url(#pNoteG)"/>
+          <path d="M 16,19 L 16,9.5 L 21,14 L 27,8 L 33,14 L 38,9.5 L 38,19 Z" fill="url(#pGoldG)"/>
+          <rect x="15" y="17.5" width="24" height="3.5" rx="1.75" fill="#d97706"/>
+          <circle cx="27" cy="8" r="2.2" fill="#fff" opacity="0.95"/>
+          <circle cx="16" cy="9.5" r="1.6" fill="#fff" opacity="0.9"/>
+          <circle cx="38" cy="9.5" r="1.6" fill="#fff" opacity="0.9"/>
+        </svg>
       </span>
       <div class="pwa-install-text">
         <strong>Install SJrMusic</strong>

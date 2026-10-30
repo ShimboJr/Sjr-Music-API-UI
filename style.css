@@ -76,31 +76,76 @@ body {
   gap: .5rem;
 }
 
+/* ── Logo icon container ────────────────── */
 .logo-icon {
-  width: 48px;
-  height: 48px;
+  width: 52px;
+  height: 52px;
   background: linear-gradient(135deg, var(--accent), var(--accent-2));
   border-radius: var(--radius-md);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   font-size: 1.5rem;
-  box-shadow: 0 0 24px var(--accent-glow), var(--shadow-glow);
+  box-shadow:
+    0 0 24px var(--accent-glow),
+    var(--shadow-glow),
+    inset 0 1px 0 rgba(255,255,255,0.15);
+  transition: transform .25s cubic-bezier(.34, 1.56, .64, 1),
+              box-shadow .25s ease;
+  flex-shrink: 0;
 }
 
+.logo-wrap:hover .logo-icon {
+  transform: scale(1.08) rotate(-3deg);
+  box-shadow:
+    0 0 36px rgba(124, 58, 237, .55),
+    0 0 0 2px rgba(168, 85, 247, .4),
+    inset 0 1px 0 rgba(255,255,255,0.15);
+}
+
+/* ── Wordmark ────────────────────────── */
 .logo-text {
   font-size: 1.9rem;
   font-weight: 800;
   letter-spacing: -.5px;
   color: var(--text-1);
+  line-height: 1;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0;
 }
 
+/* "SJr" — bold gradient, tight tracking */
+.logo-sjr {
+  font-size: 1.9rem;
+  font-weight: 900;
+  letter-spacing: -.04em;
+  background: linear-gradient(90deg, #c4b5fd 0%, var(--accent-2) 40%, #ec4899 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* "Music" — regular weight, muted, sits right after SJr */
+.logo-music-word {
+  font-size: 1.35rem;
+  font-weight: 400;
+  letter-spacing: .01em;
+  color: rgba(241, 245, 249, 0.55);
+  -webkit-text-fill-color: rgba(241, 245, 249, 0.55);
+  margin-left: .12em;
+  align-self: flex-end;
+  padding-bottom: .05em;
+}
+
+/* Legacy .logo-accent kept for any other reference (offline.html etc.) */
 .logo-accent {
   background: linear-gradient(90deg, var(--accent), var(--accent-2));
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
 }
+
 
 /* ── Hero text ────────────────────────── */
 .hero-title {
